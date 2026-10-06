@@ -14,6 +14,8 @@ Panel {
 
   property var report: ({ "legs": [], "journey": {}, "events": [], "errors": [] })
   property bool loading: false
+  property bool refreshQueued: false
+  property bool editingTrip: false
   property string lastError: ""
 
   readonly property var legs: report && report.legs ? report.legs : []
@@ -21,16 +23,20 @@ Panel {
   readonly property int activeLegIndex: Number(journey.activeLegIndex || 0)
   readonly property var activeLeg: activeLegIndex >= 0 && activeLegIndex < legs.length ? legs[activeLegIndex] : null
   readonly property var nextLeg: activeLegIndex + 1 < legs.length ? legs[activeLegIndex + 1] : null
-  readonly property int activeDelay: delayMinutes(activeLeg)
-  readonly property bool activeLate: isLate(activeLeg)
+  // Python decides what counts as late, so the red icon and the delay notification agree.
+  readonly property int activeDelay: activeLeg ? Number(activeLeg.delayMinutes || 0) : 0
+  readonly property bool activeLate: !!(activeLeg && activeLeg.late)
   readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
   readonly property string configuredLegs: String(setting("legs", ""))
+  readonly property bool needsSetup: configuredLegs.trim() === ""
+  readonly property bool setupShown: editingTrip || needsSetup
   readonly property int leaveLeadMinutes: Math.max(0, parseInt(setting("leaveLeadMinutes", 60), 10) || 0)
   readonly property var pickup: report && report.pickup ? report.pickup : ({})
   readonly property real leaveMinutes: pickup.leaveEpochMs ? Math.round((pickup.leaveEpochMs - clock.now) / 60000) : NaN
   readonly property bool leaveSoon: !pickup.done && isFinite(leaveMinutes) && leaveMinutes <= 15 && leaveMinutes > -90
   readonly property bool transferring: journey.stage === "connection" && activeLeg && activeLeg.phase === "scheduled"
-  readonly property string homeTimezone: String(setting("homeTimezone", "Europe/Berlin"))
+  // Empty means the system zone; the report names the zone Python actually used.
+  readonly property string homeTimezone: String(setting("homeTimezone", ""))
   readonly property bool notificationsEnabled: setting("notifications", true) === true
   readonly property string scriptPath: decodeURIComponent(String(Qt.resolvedUrl("bin/flight_status.py")).replace(/^file:\/\//, ""))
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -48,9 +54,9 @@ Panel {
   readonly property bool nextLegDelayed: !!nextLeg && nextLegStatus() !== "On time"
 
   function refresh() {
-    if (fetchProc.running) return
-    if (root.configuredLegs.trim() === "") {
-      lastError = "No flights set. Add legs in the widget settings, e.g. LH400@2026-12-23."
+    if (root.needsSetup) return
+    if (fetchProc.running) {
+      refreshQueued = true
       return
     }
     loading = true
@@ -61,6 +67,37 @@ Panel {
     if (!root.notificationsEnabled) command.push("--no-events")
     fetchProc.command = command
     fetchProc.running = true
+  }
+
+  // Like the built-in clock: updateEntryInline replaces the whole entry, so the other keys ride along.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  // The last report has route and times; before the first one, the configured keys have to do.
+  function editTrip() {
+    var records = legs.length ? legs : configuredLegs.split(",").filter(function(item) { return item.trim() !== "" })
+      .map(function(item) {
+        var key = item.replace(/\s+/g, "").toUpperCase()
+        return { "key": key, "code": key.split("@")[0] }
+      })
+    editingTrip = true
+    setup.start(records, leaveLeadMinutes)
+  }
+
+  function saveTrip(legKeys, leadMinutes) {
+    persistSettings({ "legs": legKeys, "leaveLeadMinutes": leadMinutes })
+    editingTrip = false
+    report = { "legs": [], "journey": {}, "events": [], "errors": [] }
+    Qt.callLater(function() {
+      root.refresh()
+      keyCatcher.forceActiveFocus()
+    })
   }
 
   function formatDuration(minutes) {
@@ -132,8 +169,9 @@ Panel {
   }
 
   function homeCity() {
-    var parts = root.homeTimezone.split("/")
-    return String(parts[parts.length - 1] || root.homeTimezone).replace(/_/g, " ")
+    var zone = String(report.homeTimezone || root.homeTimezone)
+    var parts = zone.split("/")
+    return String(parts[parts.length - 1] || zone).replace(/_/g, " ")
   }
 
   // "10:05 Frankfurt · 04:05 New York"; the home half is dropped when the clocks agree.
@@ -154,22 +192,10 @@ Panel {
     return Math.max(0, Math.min(100, Math.round(Number(activeLeg.progress.percent || 0))))
   }
 
-  // Once airborne only the arrival delay matters; before that, the worse of both.
-  function delayMinutes(leg) {
-    if (!leg) return 0
-    var arrival = Number(leg.arrivalDelayMinutes || 0)
-    return leg.departed ? arrival : Math.max(Number(leg.departureDelayMinutes || 0), arrival)
-  }
-
-  // Airline convention: 15 minutes or more counts as late.
-  function isLate(leg) {
-    return delayMinutes(leg) >= 15
-  }
-
   function nextLegStatus() {
     if (!nextLeg) return ""
     if (nextLeg.cancelled) return "Cancelled"
-    if (isLate(nextLeg)) return delayMinutes(nextLeg) + " min late"
+    if (nextLeg.late) return nextLeg.delayMinutes + " min late"
     return "On time"
   }
 
@@ -196,9 +222,10 @@ Panel {
     return details.join(" · ")
   }
 
+  // Only the transfer into the "Then" leg; during a transfer the countdown already covers it.
   function connectText() {
     var minutes = Number(journey.connectionMinutes)
-    if (journey.connectionMinutes === null || journey.connectionMinutes === undefined || !isFinite(minutes)) return ""
+    if (journey.connectionLegIndex !== activeLegIndex + 1 || !isFinite(minutes)) return ""
     return minutes < 0 ? "Connection at risk" : formatDuration(minutes) + " to connect"
   }
 
@@ -211,6 +238,7 @@ Panel {
   }
 
   function tooltipText() {
+    if (needsSetup) return "Add the flights to follow"
     if (!activeLeg) return loading ? "Updating flight…" : "Flight status unavailable"
     var lines = [activeLeg.code + " · " + phaseLabel(activeLeg)]
     var minutes = Number(journey.nextEventMinutes)
@@ -260,10 +288,16 @@ Panel {
     }
   }
 
-  onOpenedChanged: if (opened) {
+  onOpenedChanged: {
+    if (!opened) {
+      editingTrip = false  // like clock and weather: closing drops an edit; a first-run setup keeps its flights
+      return
+    }
     refresh()
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    Qt.callLater(function() { panel.focusTarget.forceActiveFocus() })
   }
+
+  Component.onCompleted: if (needsSetup) setup.start([], leaveLeadMinutes)
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -278,6 +312,10 @@ Panel {
       root.loading = false
       if (exitCode !== 0 && root.lastError === "")
         root.lastError = "Flight update failed. Try again."
+      if (root.refreshQueued) {
+        root.refreshQueued = false
+        Qt.callLater(root.refresh)
+      }
     }
   }
 
@@ -324,21 +362,48 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: keyCatcher
+    focusTarget: root.setupShown ? setup.focusItem : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(350))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(470))
+    contentHeight: panel.fittedContentHeight(root.setupShown ? setup.implicitHeight : content.implicitHeight, Style.space(470))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.setupShown
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r" || text === "R") root.refresh()
+        else if (text === "e" || text === "E") root.editTrip()
+        else if (text === "m" || text === "M") root.openMap(root.activeLeg)
+      }
+
+      SetupView {
+        id: setup
+        anchors.left: parent.left
+        anchors.right: parent.right
+        visible: root.setupShown
+        scriptPath: root.scriptPath
+        homeTimezone: root.homeTimezone
+        foreground: root.foreground
+        dim: root.dim
+        urgent: root.urgent
+        fontFamily: root.fontFamily
+        canCancel: !root.needsSetup
+        onSaved: function(legKeys, leadMinutes) { root.saveTrip(legKeys, leadMinutes) }
+        onCancelled: {
+          if (root.needsSetup) {
+            root.close()
+            return
+          }
+          root.editingTrip = false
+          keyCatcher.forceActiveFocus()
+        }
       }
 
       Flickable {
         anchors.fill: parent
+        visible: !root.setupShown
         contentWidth: width
         contentHeight: content.implicitHeight
         clip: true
@@ -370,7 +435,7 @@ Panel {
                 text: root.journey.label || root.phaseLabel(root.activeLeg)
                 color: root.iconColor()
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.subtitle
+                font.pixelSize: Style.font.title
                 font.bold: true
                 elide: Text.ElideRight
               }
@@ -461,15 +526,16 @@ Panel {
             Rectangle {
               Layout.fillWidth: true
               implicitHeight: Style.space(3)
-              radius: height / 2
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
+              radius: Style.cornerRadius > 0 ? height / 2 : 0
+              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
 
               Rectangle {
                 width: parent.width * root.progressPercent() / 100
                 height: parent.height
-                radius: height / 2
-                color: Color.accent
-                Behavior on width { NumberAnimation { duration: 420; easing.type: Easing.OutCubic } }
+                radius: parent.radius
+                color: Style.selectedStateColor(root.foreground, Color.accent)
+                // Newer shells scale motion and honour reduce-motion through Style.duration.
+                Behavior on width { NumberAnimation { duration: typeof Style.duration === "function" ? Style.duration(420) : 420; easing.type: Easing.OutCubic } }
               }
             }
 
@@ -477,6 +543,7 @@ Panel {
               Layout.fillWidth: true
 
               Text {
+                textFormat: Text.PlainText
                 text: root.activeLeg && root.activeLeg.departure ? root.activeLeg.departure.code : ""
                 color: root.dim
                 font.family: root.fontFamily
@@ -494,6 +561,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 text: root.activeLeg && root.activeLeg.arrival ? root.activeLeg.arrival.code : ""
                 color: root.dim
                 font.family: root.fontFamily
@@ -601,12 +669,31 @@ Panel {
               font.pixelSize: Style.font.caption
 
               RotationAnimator on rotation {
-                running: root.loading
+                running: root.loading && Style.reduceMotion !== true
                 from: 0
                 to: 360
                 duration: 900
                 loops: Animation.Infinite
               }
+            }
+
+            PanelActionButton {
+              visible: !!root.activeLeg
+              iconText: "\uf279"
+              tooltipText: "Live map (M)"
+              fontFamily: root.iconFontFamily
+              fontSize: Style.font.caption
+              foreground: root.dim
+              onClicked: root.openMap(root.activeLeg)
+            }
+
+            PanelActionButton {
+              iconText: "\uf304"
+              tooltipText: "Edit trip (E)"
+              fontFamily: root.iconFontFamily
+              fontSize: Style.font.caption
+              foreground: root.dim
+              onClicked: root.editTrip()
             }
           }
         }

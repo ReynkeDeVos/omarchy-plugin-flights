@@ -22,11 +22,11 @@ import adsb
 MARKER = "__NEXT_DATA__ = "
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) omarchy-plugin-flights/1.0"
 LEG_RE = re.compile(r"([A-Z0-9]{2,3}\d{1,4})@(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
-DEFAULT_HOME_TIMEZONE = "Europe/Berlin"
 BOARDING_SOON_MINUTES = 60
 DEPARTURE_SOON_MINUTES = 30
 DEFAULT_LEAVE_LEAD_MINUTES = 60
 TIGHT_CONNECTION_MINUTES = 60
+LATE_MINUTES = 15  # airline convention
 PICKUP_SHIFT_MINUTES = 10
 
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "omarchy-flights"
@@ -61,10 +61,14 @@ def safe_int(value: Any) -> int:
 def parse_leg_specs(raw: str) -> list[dict[str, str]]:
     specs: list[dict[str, str]] = []
     for item in str(raw or "").split(","):
-        match = LEG_RE.fullmatch(item.strip())
+        match = LEG_RE.fullmatch(re.sub(r"\s+", "", item))
         if not match:
             continue
         code, date = match.groups()
+        try:
+            dt.date.fromisoformat(date)  # the pattern alone lets 2026-02-30 through
+        except ValueError:
+            continue
         key = f"{code.upper()}@{date}"
         if not any(spec["key"] == key for spec in specs):
             specs.append({"key": key, "code": code.upper(), "date": date})
@@ -72,10 +76,15 @@ def parse_leg_specs(raw: str) -> list[dict[str, str]]:
 
 
 def home_zone(name: str) -> ZoneInfo:
-    try:
-        return ZoneInfo(name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo(DEFAULT_HOME_TIMEZONE)
+    """The configured zone, else the system's (TZ, then /etc/localtime), else UTC."""
+    system = os.environ.get("TZ", "").lstrip(":") or os.path.realpath("/etc/localtime").partition("zoneinfo/")[2]
+    for candidate in (name, system):
+        try:
+            if candidate:
+                return ZoneInfo(candidate)
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    return ZoneInfo("UTC")
 
 
 def home_time(value: dt.datetime | None, zone: ZoneInfo) -> str:
@@ -214,6 +223,8 @@ def normalize_flightstats(
     departure = airport_payload(flight.get("departureAirport"), scheduled_start, start, zone)
     arrival = airport_payload(flight.get("arrivalAirport"), scheduled_end, end, zone)
     alert_words = f"{status_text} {description}".lower()
+    # Once airborne only the arrival delay matters; before that, the worse of both.
+    delay = arrival_delay if departed else max(departure_delay, arrival_delay)
 
     return {
         "key": spec["key"],
@@ -228,8 +239,8 @@ def normalize_flightstats(
         "landed": landed,
         "cancelled": cancelled,
         "alert": cancelled or status.get("diverted") is True or "cancel" in alert_words,
-        "arrivalDelayMinutes": arrival_delay,
-        "departureDelayMinutes": departure_delay,
+        "delayMinutes": delay,
+        "late": delay >= LATE_MINUTES,
         "departure": departure,
         "arrival": arrival,
         "aircraft": {"callsign": track.get("callsign"), "hex": None},
@@ -337,30 +348,34 @@ def journey_from_legs(
     legs: list[dict[str, Any]],
     now: dt.datetime | None = None,
 ) -> dict[str, Any]:
-    first = legs[0] if legs else {}
-    second = legs[1] if len(legs) > 1 else {}
-    origin = city(first.get("departure"))
-    via = city(first.get("arrival"))
+    origin = city((legs[0] if legs else {}).get("departure"))
     destination = city((legs[-1] if legs else {}).get("arrival"))
-    if first.get("cancelled") or second.get("cancelled"):
-        stage, active_index, label = "disrupted", 0, "Journey needs attention"
-    elif (legs[-1] if legs else {}).get("landed"):
-        stage, active_index, label = "complete", len(legs) - 1, f"Arrived in {destination}"
-    elif second.get("departed"):
-        stage, active_index, label = "second-leg", 1, f"En route to {destination}"
-    elif first.get("landed"):
-        stage, active_index, label = "connection", min(1, len(legs) - 1), f"Transfer in {via}"
-    elif first.get("departed"):
-        stage, active_index, label = "first-leg", 0, f"En route to {via}"
+    cancelled = [index for index, leg in enumerate(legs) if leg.get("cancelled")]
+    # The latest leg that has left the gate; a later departure wins over a missing landed flag.
+    started = [index for index, leg in enumerate(legs) if leg.get("departed") or leg.get("landed")]
+    latest = started[-1] if started else -1
+    # The transfer in progress or coming up leads into the first leg after the latest departure.
+    onward = max(1, latest + 1)
+    has_transfer = onward < len(legs)
+    via = city(legs[onward - 1].get("arrival")) if has_transfer else ""
+    if cancelled:
+        stage, active_index, label = "disrupted", cancelled[0], "Journey needs attention"
+    elif latest == len(legs) - 1 and legs[latest].get("landed"):
+        stage, active_index, label = "complete", latest, f"Arrived in {destination}"
+    elif latest >= 0 and legs[latest].get("landed"):
+        stage, active_index, label = "connection", onward, f"Transfer in {via}"
+    elif latest >= 0:
+        stage, active_index, label = "en-route", latest, f"En route to {city(legs[latest].get('arrival'))}"
     else:
         stage, active_index, label = "starting", 0, f"Departing {origin}"
 
-    # Live layover: first leg's arrival estimate to second leg's departure estimate.
+    # Live layover: arrival estimate into the transfer to the onward leg's departure estimate.
     connection_minutes = None
-    landing_ms = (first.get("arrival") or {}).get("epochMs")
-    onward_ms = (second.get("departure") or {}).get("epochMs")
-    if stage != "disrupted" and second and landing_ms and onward_ms and not second.get("departed"):
-        connection_minutes = round((onward_ms - landing_ms) / 60_000)
+    if stage != "disrupted" and has_transfer:
+        landing_ms = (legs[onward - 1].get("arrival") or {}).get("epochMs")
+        onward_ms = (legs[onward].get("departure") or {}).get("epochMs")
+        if landing_ms and onward_ms:
+            connection_minutes = round((onward_ms - landing_ms) / 60_000)
 
     active = legs[active_index] if legs else {}
     phase = str(active.get("phase") or "unknown")
@@ -391,6 +406,7 @@ def journey_from_legs(
         "via": via,
         "destination": destination,
         "connectionMinutes": connection_minutes,
+        "connectionLegIndex": onward if connection_minutes is not None else None,
         "tightConnection": connection_minutes is not None and connection_minutes < TIGHT_CONNECTION_MINUTES,
         "activeLegIndex": active_index,
         "nextEventKind": next_kind,
@@ -428,14 +444,13 @@ def snapshot(report: dict[str, Any]) -> dict[str, Any]:
     pickup = report.get("pickup") or {}
     return {
         "stage": journey.get("stage"),
-        "connection": journey.get("connectionMinutes"),
         "leaveEpochMs": pickup.get("leaveEpochMs"),
         "leaveMinutes": pickup.get("leaveMinutes"),
         "legs": {
             leg["key"]: {
                 "phase": leg.get("phase"),
                 "remaining": (leg.get("progress") or {}).get("remainingMinutes"),
-                "delay": max(safe_int(leg.get("departureDelayMinutes")), safe_int(leg.get("arrivalDelayMinutes"))),
+                "delay": safe_int(leg.get("delayMinutes")),
                 "gate": (leg.get("departure") or {}).get("gate"),
             }
             for leg in report.get("legs") or []
@@ -495,7 +510,7 @@ def notification_events(
                     add(event(f"{key}:arrival:{threshold}", f"{leg['code']} is nearing {destination}", f"About {threshold} minutes to landing{suffix}", "critical" if threshold == 15 else "normal"))
 
         old_delay = safe_int(before.get("delay"))
-        new_delay = max(safe_int(leg.get("departureDelayMinutes")), safe_int(leg.get("arrivalDelayMinutes")))
+        new_delay = safe_int(leg.get("delayMinutes"))
         if old_delay < 30 <= new_delay:
             add(event(f"{key}:delay:{new_delay // 30}", f"{leg['code']} is delayed", f"Current delay: about {new_delay} minutes", "critical"))
 
@@ -511,16 +526,18 @@ def notification_events(
     via, destination = journey.get("via") or "the transfer airport", journey.get("destination") or "destination"
     old_stage = previous.get("stage")
     new_stage = current.get("stage")
+    active_index = safe_int(journey.get("activeLegIndex"))
     if old_stage != "connection" and new_stage == "connection":
-        add(event("journey:connection", f"Landed in {via}", f"Transfer: next flight to {destination} is now active", "critical"))
+        legs = report.get("legs") or []
+        onward = city(legs[active_index].get("arrival")) if active_index < len(legs) else destination
+        add(event(f"journey:connection:{active_index}", f"Landed in {via}", f"Transfer: next flight to {onward} is now active", "critical"))
     if old_stage != "complete" and new_stage == "complete":
         add(event("journey:complete", "Journey complete", f"Arrived in {destination}" + (f" · belt {(report.get('pickup') or {}).get('baggage')}" if (report.get("pickup") or {}).get("baggage") else ""), "critical"))
 
-    old_connection, new_connection = previous.get("connection"), current.get("connection")
-    if isinstance(new_connection, int) and new_connection < TIGHT_CONNECTION_MINUTES and not (
-        isinstance(old_connection, int) and old_connection < TIGHT_CONNECTION_MINUTES
-    ):
-        add(event("journey:tight-connection", f"Tight connection in {via}", f"Only about {new_connection} minutes to transfer", "critical"))
+    # One warning per transfer; the fired set keeps it from repeating.
+    connection = journey.get("connectionMinutes")
+    if journey.get("tightConnection") and isinstance(connection, int):
+        add(event(f"journey:tight-connection:{journey.get('connectionLegIndex')}", f"Tight connection in {via}", f"Only about {connection} minutes to transfer", "critical"))
 
     pickup = report.get("pickup") or {}
     leave_ms, leave_time = pickup.get("leaveEpochMs"), pickup.get("leaveHomeTime") or ""
@@ -542,22 +559,31 @@ def notification_events(
 
 def main(arguments: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--legs", required=True, help="comma-separated flight@date values")
-    parser.add_argument("--home-timezone", default=DEFAULT_HOME_TIMEZONE)
+    trip = parser.add_mutually_exclusive_group(required=True)
+    trip.add_argument("--legs", help="comma-separated flight@date values")
+    trip.add_argument("--lookup", metavar="FLIGHT@DATE", help="print one leg and leave the trip state alone")
+    parser.add_argument("--home-timezone", default="", help="IANA zone for home clock times; the system's by default")
     parser.add_argument("--leave-lead-minutes", type=int, default=DEFAULT_LEAVE_LEAD_MINUTES)
     parser.add_argument("--no-events", action="store_true")
     options = parser.parse_args(arguments)
 
+    now = utc_now()
+    zone = home_zone(options.home_timezone)
+    if options.lookup is not None:
+        found = parse_leg_specs(options.lookup)[:1]
+        leg = fetch_leg(found[0], now, zone) if found else {"phase": "unknown", "error": "Use a flight number and date like LH400@2026-12-23"}
+        print(json.dumps(leg, separators=(",", ":")))
+        return 0
+
     specs = parse_leg_specs(options.legs)
     if not specs:
         parser.error("--legs has no valid flight@date value, e.g. LH400@2026-12-23")
-    now = utc_now()
-    zone = home_zone(options.home_timezone)
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(specs))) as pool:
         legs = list(pool.map(lambda spec: fetch_leg(spec, now, zone), specs))
 
     report: dict[str, Any] = {
         "generatedAtMs": epoch_ms(now),
+        "homeTimezone": zone.key,
         "legs": legs,
         "errors": [f"{leg['code']}: {leg['error']}" for leg in legs if leg.get("error") and leg.get("phase") == "unknown"],
     }

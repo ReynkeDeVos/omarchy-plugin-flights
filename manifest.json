@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "reynkedevos.flights",
   "name": "Flights",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Reynke De Vos",
   "license": "MIT",
   "description": "Track a dated multi-leg trip in the bar: live status icons, transfer time, a leave-for-pickup time, and milestone notifications.",
@@ -20,7 +20,7 @@
     "defaultSection": "center",
     "defaults": {
       "legs": "",
-      "homeTimezone": "Europe/Berlin",
+      "homeTimezone": "",
       "refreshSeconds": 60,
       "notifications": true,
       "leaveLeadMinutes": 60
@@ -30,21 +30,21 @@
         "key": "legs",
         "type": "string",
         "label": "Dated flight legs",
-        "description": "Comma-separated flight@date values, for example LH400@2026-12-23,LH2054@2026-12-24.",
+        "description": "Comma-separated flight@date values, for example LH400@2026-12-23,LH2054@2026-12-24. The widget's setup writes this for you.",
         "defaultValue": ""
       },
       {
         "key": "homeTimezone",
         "type": "string",
         "label": "Home timezone",
-        "description": "IANA timezone used for your landing clock, for example Europe/Berlin.",
-        "defaultValue": "Europe/Berlin"
+        "description": "IANA timezone for your landing clock, for example Europe/Berlin. Empty uses the system timezone.",
+        "defaultValue": ""
       },
       {
         "key": "leaveLeadMinutes",
         "type": "integer",
-        "label": "Leave before landing",
-        "description": "Minutes before the final landing that you need to leave home for pickup.",
+        "label": "Time to the airport",
+        "description": "Minutes you need to get to the airport; you are told to leave this long before the final landing.",
         "min": 0,
         "max": 240,
         "step": 5,
