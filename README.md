@@ -40,7 +40,7 @@ Data comes from FlightStats and adsb.lol/adsbdb without API keys. It can be late
 
 ## Building the backend
 
-The widget is QML. The flight data comes from `bin/flight-status`, a small Rust program that prints one JSON report and exits. All monitors share the plugin's service (`Service.qml`), which runs it once per refresh and sends each notification once. Bars other than Omarchy's own keep services from their widgets; there every widget refreshes on its own, and the program's lock still keeps notifications single. `omarchy plugin add` and `omarchy plugin update` only fetch files and build nothing, so the built program (x86_64 Linux) is committed next to its source. After changing `src/`, rebuild it and commit both:
+The widget is QML. The flight data comes from `bin/flight-status`, a small Rust program that prints one JSON report and exits. All monitors share the plugin's service (`Service.qml`), which runs it once per refresh and sends each notification once. Bars other than Omarchy's own keep services from their widgets; there every widget refreshes on its own, and the program's lock still keeps notifications single. `omarchy plugin add` and `omarchy plugin update` only fetch files and build nothing, so the built program (x86_64 Linux) is committed next to its source. After changing `src/`, rebuild it with Rust 1.89 or newer (from mise, rustup or pacman) and commit both:
 
 ```bash
 cargo build --release --locked
