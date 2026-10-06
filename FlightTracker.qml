@@ -3,7 +3,6 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -12,11 +11,18 @@ Panel {
   moduleName: "reynkedevos.flights"
   ipcTarget: "reynkedevos.flights"
 
-  property var report: ({ "legs": [], "journey": {}, "events": [], "errors": [] })
-  property bool loading: false
-  property bool refreshQueued: false
   property bool editingTrip: false
-  property string lastError: ""
+  // The bar hands the settings over after creating the widget; until then there is nothing to pass on.
+  property bool configured: false
+
+  // One feed for every monitor: the host's service under the built-in bar. A
+  // replacement bar keeps services from its widgets, so there each loads its own.
+  readonly property var sharedFeed: bar && bar.shell && typeof bar.shell.serviceFor === "function"
+    ? bar.shell.serviceFor(moduleName) : null
+  readonly property var feed: sharedFeed || ownFeed.item
+  readonly property var report: feed ? feed.report : ({ "legs": [], "journey": {}, "events": [], "errors": [] })
+  readonly property bool loading: !!feed && feed.loading
+  readonly property string lastError: feed ? feed.lastError : ""
 
   readonly property var legs: report && report.legs ? report.legs : []
   readonly property var journey: report && report.journey ? report.journey : ({})
@@ -26,20 +32,14 @@ Panel {
   // The backend decides what counts as late, so the red icon and the delay notification agree.
   readonly property int activeDelay: activeLeg ? Number(activeLeg.delayMinutes || 0) : 0
   readonly property bool activeLate: !!(activeLeg && activeLeg.late)
-  readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
-  readonly property string configuredLegs: String(setting("legs", ""))
-  readonly property bool needsSetup: configuredLegs.trim() === ""
+  readonly property bool needsSetup: !feed || feed.needsSetup
   readonly property bool setupShown: editingTrip || needsSetup
-  readonly property int leaveLeadMinutes: Math.max(0, parseInt(setting("leaveLeadMinutes", 60), 10) || 0)
+  readonly property int leaveLeadMinutes: feed ? feed.leaveLeadMinutes : 60
   readonly property var pickup: report && report.pickup ? report.pickup : ({})
-  readonly property real leaveMinutes: pickup.leaveEpochMs ? Math.round((pickup.leaveEpochMs - clock.now) / 60000) : NaN
+  readonly property real leaveMinutes: pickup.leaveEpochMs && feed ? Math.round((pickup.leaveEpochMs - feed.now) / 60000) : NaN
   readonly property bool leaveSoon: !pickup.done && isFinite(leaveMinutes) && leaveMinutes <= 15 && leaveMinutes > -90
   readonly property bool transferring: journey.stage === "connection" && activeLeg && activeLeg.phase === "scheduled"
-  // Empty means the system zone; the report names the zone the backend actually used.
-  readonly property string homeTimezone: String(setting("homeTimezone", ""))
-  readonly property bool notificationsEnabled: setting("notifications", true) === true
-  // The prebuilt Rust backend; it answers and exits, so nothing stays running between refreshes.
-  readonly property string backendPath: decodeURIComponent(String(Qt.resolvedUrl("bin/flight-status")).replace(/^file:\/\//, ""))
+  readonly property string homeTimezone: feed ? feed.homeTimezone : ""
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.5)
@@ -55,23 +55,12 @@ Panel {
   readonly property bool nextLegDelayed: !!nextLeg && (!!nextLeg.cancelled || !!nextLeg.late)
 
   function refresh() {
-    if (root.needsSetup) return
-    if (fetchProc.running) {
-      refreshQueued = true
-      return
-    }
-    loading = true
-    lastError = ""
-    var command = [root.backendPath, "--legs", root.configuredLegs,
-                   "--home-timezone", root.homeTimezone,
-                   "--leave-lead-minutes", String(root.leaveLeadMinutes)]
-    fetchProc.command = command
-    fetchProc.running = true
+    if (root.feed) root.feed.refresh()
   }
 
   // The last report has route and times; before the first one, the configured keys have to do.
   function editTrip() {
-    var records = legs.length ? legs : configuredLegs.split(",").filter(function(item) { return item.trim() !== "" })
+    var records = legs.length ? legs : feed.configuredLegs.split(",").filter(function(item) { return item.trim() !== "" })
       .map(function(item) {
         var key = item.replace(/\s+/g, "").toUpperCase()
         return { "key": key, "code": key.split("@")[0] }
@@ -90,11 +79,8 @@ Panel {
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
     editingTrip = false
-    report = { "legs": [], "journey": {}, "events": [], "errors": [] }
-    Qt.callLater(function() {
-      root.refresh()
-      keyCatcher.forceActiveFocus()
-    })
+    if (root.feed) root.feed.restart()
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
   function formatDuration(minutes) {
@@ -252,41 +238,19 @@ Panel {
     if (url !== "") Quickshell.execDetached(["omarchy-launch-browser", url])
   }
 
-  function announce(events) {
-    if (!root.notificationsEnabled || !events) return
-    for (var index = 0; index < events.length; index++) {
-      var item = events[index]
-      Quickshell.execDetached([
-        "notify-send", "--app-name", "Flights", "--urgency", String(item.urgency || "normal"),
-        "--expire-time", item.urgency === "critical" ? "0" : "12000",
-        String(item.title || "Flight update"), String(item.body || "")
-      ])
-    }
+  // Every widget carries the same entry; each hands the bar's latest to the feed.
+  onSettingsChanged: {
+    configured = true
+    if (feed) feed.settings = settings
   }
-
-  function acceptReport(text) {
-    var raw = String(text || "").trim()
-    if (raw === "") {
-      lastError = "No flight data. Try again shortly."
-      return
-    }
-    try {
-      var parsed = JSON.parse(raw)
-      if (!parsed || !parsed.legs) throw new Error("missing legs")
-      report = parsed
-      lastError = parsed.errors && parsed.errors.length ? parsed.errors.join(" · ") : ""
-      announce(parsed.events)
-    } catch (error) {
-      lastError = "Flight data could not be read."
-    }
-  }
+  onFeedChanged: if (feed && configured) feed.settings = settings
 
   onOpenedChanged: {
     if (!opened) {
       editingTrip = false  // like clock and weather: closing drops an edit; a first-run setup keeps its flights
       return
     }
-    refresh()
+    if (feed) feed.refreshIfStale()
     Qt.callLater(function() { panel.focusTarget.forceActiveFocus() })
   }
 
@@ -295,39 +259,10 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  Process {
-    id: fetchProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.acceptReport(text)
-    }
-    onExited: function(exitCode) {
-      root.loading = false
-      if (exitCode !== 0 && root.lastError === "")
-        root.lastError = "Flight update failed. Try again."
-      if (root.refreshQueued) {
-        root.refreshQueued = false
-        Qt.callLater(root.refresh)
-      }
-    }
-  }
-
-  // Ticks the leave-by countdown between feed refreshes.
-  Timer {
-    id: clock
-    property real now: Date.now()
-    interval: 30000
-    running: true
-    repeat: true
-    onTriggered: now = Date.now()
-  }
-
-  Timer {
-    interval: root.refreshSeconds * 1000
-    running: true
-    repeat: true
-    triggeredOnStart: true
-    onTriggered: root.refresh()
+  Loader {
+    id: ownFeed
+    active: root.bar !== null && root.sharedFeed === null
+    source: "Service.qml"
   }
 
   BarIconButton {
@@ -376,7 +311,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         visible: root.setupShown
-        backendPath: root.backendPath
+        backendPath: root.feed ? root.feed.backendPath : ""
         homeTimezone: root.homeTimezone
         foreground: root.foreground
         dim: root.dim
