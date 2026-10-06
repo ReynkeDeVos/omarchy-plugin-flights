@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Track a dated, multi-leg journey for the Omarchy flights plugin."""
 
-from __future__ import annotations
-
 import argparse
 import concurrent.futures
 import datetime as dt
@@ -41,7 +39,7 @@ def parse_time(value: Any) -> dt.datetime | None:
     if not value:
         return None
     try:
-        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(str(value))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
     except (TypeError, ValueError):
         return None
@@ -87,8 +85,13 @@ def home_zone(name: str) -> ZoneInfo:
     return ZoneInfo("UTC")
 
 
-def home_time(value: dt.datetime | None, zone: ZoneInfo) -> str:
-    return value.astimezone(zone).strftime("%H:%M") if value else ""
+def home_time(value: dt.datetime | None, zone: ZoneInfo, now: dt.datetime | None = None) -> str:
+    """"08:20", or "Wed 08:20" when `now` is given and the day differs at home."""
+    if not value:
+        return ""
+    local = value.astimezone(zone)
+    other_day = now is not None and local.date() != now.astimezone(zone).date()
+    return local.strftime("%a %H:%M" if other_day else "%H:%M")
 
 
 def flight_url(spec: dict[str, str]) -> str:
@@ -232,7 +235,6 @@ def normalize_flightstats(
         "airline": str((((flight.get("ticketHeader") or {}).get("carrier")) or {}).get("name") or ""),
         "url": flight_url(spec),
         "route": f"{departure['code']} → {arrival['code']}",
-        "status": status_text,
         "description": description,
         "phase": phase,
         "departed": departed,
@@ -402,7 +404,6 @@ def journey_from_legs(
     return {
         "stage": stage,
         "label": label,
-        "origin": origin,
         "via": via,
         "destination": destination,
         "connectionMinutes": connection_minutes,
@@ -429,7 +430,7 @@ def pickup_for(legs: list[dict[str, Any]], lead_minutes: int, now: dt.datetime, 
         "landingEpochMs": landing_ms,
         "landingHomeTime": home_time(landing, zone),
         "leaveEpochMs": epoch_ms(leave),
-        "leaveHomeTime": home_time(leave, zone),
+        "leaveHomeTime": home_time(leave, zone, now),
         "leaveMinutes": round((leave - now).total_seconds() / 60) if leave else None,
         "airport": arrival.get("code") or "",
         "terminal": arrival.get("terminal"),
@@ -564,7 +565,6 @@ def main(arguments: list[str] | None = None) -> int:
     trip.add_argument("--lookup", metavar="FLIGHT@DATE", help="print one leg and leave the trip state alone")
     parser.add_argument("--home-timezone", default="", help="IANA zone for home clock times; the system's by default")
     parser.add_argument("--leave-lead-minutes", type=int, default=DEFAULT_LEAVE_LEAD_MINUTES)
-    parser.add_argument("--no-events", action="store_true")
     options = parser.parse_args(arguments)
 
     now = utc_now()
@@ -600,7 +600,7 @@ def main(arguments: list[str] | None = None) -> int:
             state = {}
         events, fired = notification_events(state.get("snapshot"), report, set(state.get("fired") or []))
         adsb.write_json(str(STATE_PATH), {"trip": trip, "snapshot": snapshot(report), "fired": sorted(fired)})
-    report["events"] = [] if options.no_events else events
+    report["events"] = events
     print(json.dumps(report, separators=(",", ":")))
     return 0
 

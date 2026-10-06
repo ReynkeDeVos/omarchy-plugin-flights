@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import contextlib
 import datetime as dt
 import io
@@ -154,6 +152,7 @@ class FlightStatusTests(unittest.TestCase):
 
         before = report_at(landing - dt.timedelta(minutes=80))
         self.assertEqual(before["pickup"]["leaveHomeTime"], "11:45")
+        self.assertEqual(flight_status.pickup_for([final], 60, landing - dt.timedelta(days=1), zone)["leaveHomeTime"], "Wed 11:45")
         soon = report_at(landing - dt.timedelta(minutes=74))
         events, fired = flight_status.notification_events(flight_status.snapshot(before), soon)
         self.assertEqual([item["key"] for item in events], ["pickup:15"])

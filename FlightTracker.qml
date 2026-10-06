@@ -51,7 +51,7 @@ Panel {
   readonly property bool boardingAttention: activeLeg && activeLeg.phase === "boarding-soon"
   readonly property bool departureAttention: activeLeg
     && ["departing-soon", "awaiting-departure"].indexOf(String(activeLeg.phase || "")) >= 0
-  readonly property bool nextLegDelayed: !!nextLeg && nextLegStatus() !== "On time"
+  readonly property bool nextLegDelayed: !!nextLeg && (!!nextLeg.cancelled || !!nextLeg.late)
 
   function refresh() {
     if (root.needsSetup) return
@@ -64,19 +64,8 @@ Panel {
     var command = ["python3", root.scriptPath, "--legs", root.configuredLegs,
                    "--home-timezone", root.homeTimezone,
                    "--leave-lead-minutes", String(root.leaveLeadMinutes)]
-    if (!root.notificationsEnabled) command.push("--no-events")
     fetchProc.command = command
     fetchProc.running = true
-  }
-
-  // Like the built-in clock: updateEntryInline replaces the whole entry, so the other keys ride along.
-  function persistSettings(values) {
-    var entry = { id: root.moduleName }
-    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
-    for (var key in values) entry[key] = values[key]
-    root.settings = entry
-    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
-      root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
   // The last report has route and times; before the first one, the configured keys have to do.
@@ -90,8 +79,15 @@ Panel {
     setup.start(records, leaveLeadMinutes)
   }
 
+  // Like the built-in clock: updateEntryInline replaces the whole entry, so the other keys ride along.
   function saveTrip(legKeys, leadMinutes) {
-    persistSettings({ "legs": legKeys, "leaveLeadMinutes": leadMinutes })
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    entry.legs = legKeys
+    entry.leaveLeadMinutes = leadMinutes
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
     editingTrip = false
     report = { "legs": [], "journey": {}, "events": [], "errors": [] }
     Qt.callLater(function() {
@@ -189,7 +185,7 @@ Panel {
 
   function progressPercent() {
     if (!activeLeg || !activeLeg.progress) return 0
-    return Math.max(0, Math.min(100, Math.round(Number(activeLeg.progress.percent || 0))))
+    return Math.round(Number(activeLeg.progress.percent || 0))
   }
 
   function nextLegStatus() {
@@ -202,11 +198,7 @@ Panel {
   function leaveText() {
     if (pickup.done) return "Pickup now"
     if (!pickup.leaveHomeTime) return "Leave time unknown"
-    // ponytail: weekday uses the machine's timezone, assumed to equal homeTimezone.
-    var leave = new Date(pickup.leaveEpochMs || clock.now)
-    var day = leave.toDateString() === new Date(clock.now).toDateString()
-      ? "" : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][leave.getDay()] + " "
-    return "Leave by " + day + pickup.leaveHomeTime
+    return "Leave by " + pickup.leaveHomeTime
   }
 
   function leaveCountdown() {

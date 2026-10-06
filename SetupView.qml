@@ -39,7 +39,7 @@ ColumnLayout {
     step = 1
     error = ""
     flightField.text = ""
-    dateField.text = lastLeg ? legDate(lastLeg) : isoDate(new Date())
+    dateField.text = lastLeg ? legDate(lastLeg) : Qt.formatDate(new Date(), "yyyy-MM-dd")
     setLead(lead)
     Qt.callLater(focusStep)
   }
@@ -47,14 +47,6 @@ ColumnLayout {
   function focusStep() {
     focusItem.selectAll()
     focusItem.forceActiveFocus()
-  }
-
-  function pad(number) {
-    return (number < 10 ? "0" : "") + number
-  }
-
-  function isoDate(date) {
-    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate())
   }
 
   function parseIso(text) {
@@ -77,7 +69,7 @@ ColumnLayout {
   function shiftDate(days) {
     var date = parseIso(dateField.text) || new Date()
     date.setDate(date.getDate() + days)
-    dateField.text = isoDate(date)
+    dateField.text = Qt.formatDate(date, "yyyy-MM-dd")
   }
 
   function setLead(minutes) {
@@ -112,7 +104,7 @@ ColumnLayout {
     var leg = null
     try { leg = JSON.parse(String(text || "")) } catch (parseError) {}
     if (!leg || !leg.key) {
-      error = "Use a flight number like LH400 and a date like " + isoDate(new Date()) + "."
+      error = "Use a flight number like LH400 and a date like " + Qt.formatDate(new Date(), "yyyy-MM-dd") + "."
     } else if (leg.phase === "unknown") {
       error = "Couldn't find " + pendingCode + " on " + dayLabel(pendingDate) + ". Check the number and the local departure date."
     } else if (hasLeg(leg.key)) {
@@ -153,7 +145,8 @@ ColumnLayout {
     var arrival = lastLeg && lastLeg.arrival || {}
     if (!arrival.epochMs) return ""
     var leave = new Date(arrival.epochMs - leadMinutes * 60000)
-    var day = isoDate(leave) === isoDate(new Date()) ? "" : " on " + dayLabel(isoDate(leave))
+    var leaveDay = Qt.formatDate(leave, "yyyy-MM-dd")
+    var day = leaveDay === Qt.formatDate(new Date(), "yyyy-MM-dd") ? "" : " on " + dayLabel(leaveDay)
     return "Leave by " + Qt.formatTime(leave, "HH:mm") + day + " to be at " + (arrival.code || "the airport")
       + " when " + lastLeg.code + " lands."
   }

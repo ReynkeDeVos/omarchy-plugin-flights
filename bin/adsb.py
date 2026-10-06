@@ -5,8 +5,6 @@ like Emirates or Turkish may transmit alphanumeric callsigns (UAE57X, THY5HX).
 Lookups try FlightStats' callsign, the last pinned match, then adsbdb's.
 """
 
-from __future__ import annotations
-
 import json
 import math
 import os
@@ -53,12 +51,12 @@ def write_json(path: str, value: Any) -> None:
         pass
 
 
-def _get_json(url: str, timeout: int = 12) -> dict[str, Any]:
+def _get_json(url: str) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=12) as response:
         return json.load(response)
 
 
@@ -77,15 +75,7 @@ def haversine_nm(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> floa
 def _airport(node: dict[str, Any] | None) -> dict[str, Any] | None:
     if not node:
         return None
-    return {
-        "iata": node.get("iata_code") or "",
-        "icao": node.get("icao_code") or "",
-        "name": node.get("name") or "",
-        "city": node.get("municipality") or "",
-        "country": node.get("country_name") or "",
-        "lat": node.get("latitude"),
-        "lon": node.get("longitude"),
-    }
+    return {"lat": node.get("latitude"), "lon": node.get("longitude")}
 
 
 def resolve_route(ident: str) -> dict[str, Any] | None:
@@ -102,12 +92,8 @@ def resolve_route(ident: str) -> dict[str, Any] | None:
     if not route_data:
         write_json(cache_path("route", key), {})
         return None
-    airline = route_data.get("airline") or {}
     route = {
         "callsignIcao": route_data.get("callsign_icao") or key,
-        "callsignIata": route_data.get("callsign_iata") or "",
-        "airline": airline.get("name") or "",
-        "airlineIcao": airline.get("icao") or "",
         "origin": _airport(route_data.get("origin")),
         "destination": _airport(route_data.get("destination")),
     }
