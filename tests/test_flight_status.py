@@ -119,6 +119,14 @@ class FlightStatusTests(unittest.TestCase):
         journey = flight_status.journey_from_legs([first, leg("LH401@2026-07-16", "scheduled", None, departed=False)])
         self.assertEqual((journey["stage"], journey["nextEventKind"], journey["nextEventMinutes"], journey["connectionMinutes"]), ("disrupted", "cancelled", None, None))
 
+    def test_delay_alone_is_not_an_alert(self):
+        spec = {"key": "LH400@2026-07-15", "code": "LH400", "date": "2026-07-15"}
+        now, zone = dt.datetime(2026, 7, 15, 12, 0, tzinfo=dt.UTC), flight_status.home_zone("Europe/Berlin")
+        delayed = {"status": {"delay": {"arrival": {"minutes": 45}}}}
+        self.assertFalse(flight_status.normalize_flightstats(spec, delayed, now, zone)["alert"])
+        cancelled = {"flightNote": {"canceled": True}}
+        self.assertTrue(flight_status.normalize_flightstats(spec, cancelled, now, zone)["alert"])
+
     def test_emits_each_landing_threshold_once(self):
         current_leg = leg("LH400@2026-07-15", "arriving", 58)
         report = {"generatedAtMs": 0, "legs": [current_leg], "journey": {"stage": "first-leg"}}

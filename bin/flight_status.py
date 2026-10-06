@@ -227,7 +227,7 @@ def normalize_flightstats(
         "departed": departed,
         "landed": landed,
         "cancelled": cancelled,
-        "alert": cancelled or status.get("diverted") is True or "cancel" in alert_words or arrival_delay >= 30,
+        "alert": cancelled or status.get("diverted") is True or "cancel" in alert_words,
         "arrivalDelayMinutes": arrival_delay,
         "departureDelayMinutes": departure_delay,
         "departure": departure,

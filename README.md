@@ -6,8 +6,9 @@ I wanted to track my partner's flights, so we can stay in touch better during he
   <img src="docs/assets/boarding.avif" width="350" alt="Boarding soon: gate and terminal">
   <img src="docs/assets/departing.avif" width="350" alt="Takeoff in a few minutes">
   <img src="docs/assets/en-route.avif" width="350" alt="En route: countdown to landing, leave-by time, flight progress and the connecting flight">
-  <img src="docs/assets/delayed.avif" width="350" alt="Delayed in the air: minutes late and a shrinking connection">
+  <img src="docs/assets/delayed.avif" width="350" alt="Delayed in the air: the plane turns red">
   <img src="docs/assets/landing.avif" width="350" alt="On approach: landing in under an hour">
+  <img src="docs/assets/connection-risk.avif" width="350" alt="Connection in danger: the delay leaves less than an hour to change planes">
   <img src="docs/assets/transfer.avif" width="350" alt="Transfer: countdown to the connecting flight">
   <img src="docs/assets/disrupted.avif" width="350" alt="A cancelled flight">
   <img src="docs/assets/arrived.avif" width="350" alt="Arrived: terminal, gate and baggage belt">
@@ -30,6 +31,6 @@ Then add the trip to the widget's entry in `~/.config/omarchy/shell.json`:
 
 Optional: `leaveLeadMinutes` (60), `homeTimezone` (`Europe/Berlin`), `refreshSeconds` (60), `notifications` (`true`).
 
-Left-click opens the panel, middle-click the live map, right-click refreshes. Notifications cover takeoff, delays, gate changes, landing in 60/30/15 minutes, the transfer, when to leave, and arrival.
+Left-click opens the panel, middle-click the live map, right-click refreshes. A delay of 15 minutes or more turns the icon red; the warning triangle is only for cancellations, diversions and connections under an hour. Notifications cover takeoff, delays, gate changes, landing in 60/30/15 minutes, the transfer, when to leave, and arrival.
 
 Data comes from FlightStats and adsb.lol/adsbdb without API keys. It can be late or wrong, so check with the airline before you drive.

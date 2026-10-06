@@ -22,7 +22,8 @@ Panel {
   readonly property var activeLeg: activeLegIndex >= 0 && activeLegIndex < legs.length ? legs[activeLegIndex] : null
   readonly property var nextLeg: activeLegIndex + 1 < legs.length ? legs[activeLegIndex + 1] : null
   readonly property int activeDelay: delayMinutes(activeLeg)
-    readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
+  readonly property bool activeLate: isLate(activeLeg)
+  readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
   readonly property string configuredLegs: String(setting("legs", ""))
   readonly property int leaveLeadMinutes: Math.max(0, parseInt(setting("leaveLeadMinutes", 60), 10) || 0)
   readonly property var pickup: report && report.pickup ? report.pickup : ({})
@@ -37,7 +38,8 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.5)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property string iconFontFamily: "Font Awesome 7 Free Solid"
-  readonly property bool hasAlert: activeLeg ? !!activeLeg.alert : false
+  // The triangle is reserved for trouble: cancelled, diverted, or a connection in danger.
+  readonly property bool hasAlert: (activeLeg ? !!activeLeg.alert : false) || !!journey.tightConnection
   readonly property bool approaching: activeLeg
     && ["arriving", "final-approach"].indexOf(String(activeLeg.phase || "")) >= 0
   readonly property bool boardingAttention: activeLeg && activeLeg.phase === "boarding-soon"
@@ -102,8 +104,9 @@ Panel {
 
   function iconColor() {
     if (hasAlert || (activeLeg && activeLeg.phase === "cancelled")) return root.urgent
-    if (leaveSoon || journey.tightConnection) return root.urgent
-    if (approaching || boardingAttention || departureAttention || journey.stage === "complete") return Color.accent
+    if (journey.stage === "complete") return Color.accent
+    if (leaveSoon || activeLate) return root.urgent
+    if (approaching || boardingAttention || departureAttention) return Color.accent
     return root.foreground
   }
 
@@ -158,11 +161,15 @@ Panel {
     return leg.departed ? arrival : Math.max(Number(leg.departureDelayMinutes || 0), arrival)
   }
 
+  // Airline convention: 15 minutes or more counts as late.
+  function isLate(leg) {
+    return delayMinutes(leg) >= 15
+  }
+
   function nextLegStatus() {
     if (!nextLeg) return ""
     if (nextLeg.cancelled) return "Cancelled"
-    var delay = delayMinutes(nextLeg)
-    if (delay >= 5) return delay + " min late"
+    if (isLate(nextLeg)) return delayMinutes(nextLeg) + " min late"
     return "On time"
   }
 
@@ -301,7 +308,7 @@ Panel {
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.body
     active: root.hasAlert || root.approaching || root.leaveSoon || root.transferring || root.boardingAttention
-      || root.departureAttention || root.journey.stage === "complete"
+      || root.departureAttention || root.activeLate || root.journey.stage === "complete"
     activeColor: root.iconColor()
     tooltipText: root.tooltipText()
     onPressed: function(buttonCode) {
@@ -372,8 +379,8 @@ Panel {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
                 text: root.activeLeg ? root.activeLeg.code + " · " + root.activeLeg.route
-                  + (root.activeDelay >= 5 ? " · " + root.activeDelay + " min late" : "") : "Updating…"
-                color: root.activeDelay >= 5 ? root.urgent : root.dim
+                  + (root.activeLate ? " · " + root.activeDelay + " min late" : "") : "Updating…"
+                color: root.activeLate ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
