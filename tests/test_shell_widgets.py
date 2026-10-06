@@ -142,6 +142,7 @@ ShellRoot {
     function open(index: int): string { var start = Date.now(); harness.widgets[index].item.open(); return String(Date.now() - start) }
     function close(index: int): void { harness.widgets[index].item.close() }
     function refresh(index: int): void { harness.widgets[index].item.refresh() }
+    function collect(): void { gc() }
     function editTrip(index: int): void { harness.widgets[index].item.editTrip() }
     function type(index: int, field: int, text: string): string {
       var fields = harness.textFields(index)
