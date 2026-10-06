@@ -12,6 +12,7 @@ Panel {
   ipcTarget: "reynkedevos.flights"
 
   property bool editingTrip: false
+  property bool keepSetup: false
   // The bar hands the settings over after creating the widget; until then there is nothing to pass on.
   property bool configured: false
 
@@ -34,7 +35,6 @@ Panel {
   readonly property bool activeLate: !!(activeLeg && activeLeg.late)
   readonly property bool needsSetup: !feed || feed.needsSetup
   readonly property bool setupShown: editingTrip || needsSetup
-  readonly property int leaveLeadMinutes: feed ? feed.leaveLeadMinutes : 60
   readonly property var pickup: report && report.pickup ? report.pickup : ({})
   readonly property real leaveMinutes: pickup.leaveEpochMs && feed ? Math.round((pickup.leaveEpochMs - feed.now) / 60000) : NaN
   readonly property bool leaveSoon: !pickup.done && isFinite(leaveMinutes) && leaveMinutes <= 15 && leaveMinutes > -90
@@ -66,7 +66,7 @@ Panel {
         return { "key": key, "code": key.split("@")[0] }
       })
     editingTrip = true
-    setup.start(records, leaveLeadMinutes)
+    if (setupLoader.item) setupLoader.item.start(records, root.feed.leaveLeadMinutes)
   }
 
   // Like the built-in clock: updateEntryInline replaces the whole entry, so the other keys ride along.
@@ -254,7 +254,7 @@ Panel {
     Qt.callLater(function() { panel.focusTarget.forceActiveFocus() })
   }
 
-  Component.onCompleted: if (needsSetup) setup.start([], leaveLeadMinutes)
+  onNeedsSetupChanged: if (!needsSetup) keepSetup = false
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -290,9 +290,11 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: root.setupShown ? setup.focusItem : keyCatcher
+    focusTarget: root.setupShown && setupLoader.item ? setupLoader.item.focusItem : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(350))
-    contentHeight: panel.fittedContentHeight(root.setupShown ? setup.implicitHeight : content.implicitHeight, Style.space(470))
+    contentHeight: panel.fittedContentHeight(root.setupShown
+      ? (setupLoader.item ? setupLoader.item.implicitHeight : 0)
+      : (detailsLoader.item ? detailsLoader.item.contentHeight : 0), Style.space(470))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -306,51 +308,95 @@ Panel {
         else if (text === "m" || text === "M") root.openMap(root.activeLeg)
       }
 
-      SetupView {
-        id: setup
+      // The panel's contents exist only while it shows, so closed panels on every
+      // monitor cost nothing and animate nothing. A first-run setup is kept, with
+      // its flights and typing, until the trip is saved.
+      Loader {
+        id: setupLoader
         anchors.left: parent.left
         anchors.right: parent.right
+        active: root.setupShown && (panel.visible || root.keepSetup)
         visible: root.setupShown
-        backendPath: root.feed ? root.feed.backendPath : ""
-        homeTimezone: root.homeTimezone
-        foreground: root.foreground
-        dim: root.dim
-        urgent: root.urgent
-        fontFamily: root.fontFamily
-        canCancel: !root.needsSetup
-        onSaved: function(legKeys, leadMinutes) { root.saveTrip(legKeys, leadMinutes) }
-        onCancelled: {
-          if (root.needsSetup) {
-            root.close()
-            return
+        onLoaded: {
+          if (!root.needsSetup) return
+          root.keepSetup = true
+          item.start([], root.feed.leaveLeadMinutes)
+        }
+
+        sourceComponent: SetupView {
+          backendPath: root.feed ? root.feed.backendPath : ""
+          homeTimezone: root.homeTimezone
+          foreground: root.foreground
+          dim: root.dim
+          urgent: root.urgent
+          fontFamily: root.fontFamily
+          canCancel: !root.needsSetup
+          onSaved: function(legKeys, leadMinutes) { root.saveTrip(legKeys, leadMinutes) }
+          onCancelled: {
+            if (root.needsSetup) {
+              root.close()
+              return
+            }
+            root.editingTrip = false
+            keyCatcher.forceActiveFocus()
           }
-          root.editingTrip = false
-          keyCatcher.forceActiveFocus()
         }
       }
 
-      Flickable {
+      Loader {
+        id: detailsLoader
         anchors.fill: parent
+        active: panel.visible
         visible: !root.setupShown
-        contentWidth: width
-        contentHeight: content.implicitHeight
-        clip: true
-        boundsBehavior: Flickable.StopAtBounds
 
-        ColumnLayout {
-          id: content
-          width: parent.width
-          spacing: Style.space(14)
+        sourceComponent: Flickable {
+          contentWidth: width
+          contentHeight: content.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
 
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: Style.space(10)
+          ColumnLayout {
+            id: content
+            width: parent.width
+            spacing: Style.space(14)
 
-            Text {
-              text: root.iconGlyph()
-              color: root.iconColor()
-              font.family: root.iconFontFamily
-              font.pixelSize: Style.font.title
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(10)
+
+              Text {
+                text: root.iconGlyph()
+                color: root.iconColor()
+                font.family: root.iconFontFamily
+                font.pixelSize: Style.font.title
+              }
+
+              ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.PlainText
+                  text: root.journey.label || root.phaseLabel(root.activeLeg)
+                  color: root.iconColor()
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.PlainText
+                  text: root.activeLeg ? root.activeLeg.code + " · " + root.activeLeg.route
+                    + (root.activeLate ? " · " + root.activeDelay + " min late" : "") : "Updating…"
+                  color: root.activeLate ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+              }
             }
 
             ColumnLayout {
@@ -360,268 +406,241 @@ Panel {
               Text {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
-                text: root.journey.label || root.phaseLabel(root.activeLeg)
-                color: root.iconColor()
+                text: root.countdownValue()
+                color: root.foreground
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.title
+                font.pixelSize: Style.font.display
                 font.bold: true
-                elide: Text.ElideRight
               }
 
               Text {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
-                text: root.activeLeg ? root.activeLeg.code + " · " + root.activeLeg.route
-                  + (root.activeLate ? " · " + root.activeDelay + " min late" : "") : "Updating…"
-                color: root.activeLate ? root.urgent : root.dim
+                text: root.countdownCaption()
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+              }
+            }
+
+            ColumnLayout {
+              Layout.fillWidth: true
+              visible: !!root.pickup.landingEpochMs
+              spacing: Style.space(2)
+
+              RowLayout {
+                Layout.fillWidth: true
+
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.PlainText
+                  text: root.leaveText()
+                  color: root.leaveSoon ? root.urgent : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.leaveCountdown()
+                  color: root.leaveSoon ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: root.leaveSoon
+                }
+              }
+
+              Text {
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                text: root.arrivalDetail()
+                color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
               }
             }
-          }
 
-          ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 0
-
-            Text {
+            ColumnLayout {
               Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: root.countdownValue()
-              color: root.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.display
-              font.bold: true
-            }
-
-            Text {
-              Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: root.countdownCaption()
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-          }
-
-          ColumnLayout {
-            Layout.fillWidth: true
-            visible: !!root.pickup.landingEpochMs
-            spacing: Style.space(2)
-
-            RowLayout {
-              Layout.fillWidth: true
-
-              Text {
-                Layout.fillWidth: true
-                textFormat: Text.PlainText
-                text: root.leaveText()
-                color: root.leaveSoon ? root.urgent : root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: root.leaveCountdown()
-                color: root.leaveSoon ? root.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: root.leaveSoon
-              }
-            }
-
-            Text {
-              Layout.fillWidth: true
-              textFormat: Text.PlainText
-              text: root.arrivalDetail()
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-            }
-          }
-
-          ColumnLayout {
-            Layout.fillWidth: true
-            visible: root.activeLeg && root.activeLeg.progress
-              && root.activeLeg.departed && !root.activeLeg.landed
-            spacing: Style.space(5)
-
-            Rectangle {
-              Layout.fillWidth: true
-              implicitHeight: Style.space(3)
-              radius: Style.cornerRadius > 0 ? height / 2 : 0
-              color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+              visible: root.activeLeg && root.activeLeg.progress
+                && root.activeLeg.departed && !root.activeLeg.landed
+              spacing: Style.space(5)
 
               Rectangle {
-                width: parent.width * root.progressPercent() / 100
-                height: parent.height
-                radius: parent.radius
-                color: Style.selectedStateColor(root.foreground, Color.accent)
-                // Newer shells scale motion and honour reduce-motion through Style.duration.
-                Behavior on width { NumberAnimation { duration: typeof Style.duration === "function" ? Style.duration(420) : 420; easing.type: Easing.OutCubic } }
-              }
-            }
-
-            RowLayout {
-              Layout.fillWidth: true
-
-              Text {
-                textFormat: Text.PlainText
-                text: root.activeLeg && root.activeLeg.departure ? root.activeLeg.departure.code : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-
-              Text {
                 Layout.fillWidth: true
-                text: root.progressPercent() + "% of this flight"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                horizontalAlignment: Text.AlignHCenter
+                implicitHeight: Style.space(3)
+                radius: Style.cornerRadius > 0 ? height / 2 : 0
+                color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+
+                Rectangle {
+                  width: parent.width * root.progressPercent() / 100
+                  height: parent.height
+                  radius: parent.radius
+                  color: Style.selectedStateColor(root.foreground, Color.accent)
+                  // Newer shells scale motion and honour reduce-motion through Style.duration.
+                  Behavior on width { NumberAnimation { duration: typeof Style.duration === "function" ? Style.duration(420) : 420; easing.type: Easing.OutCubic } }
+                }
               }
 
-              Text {
-                textFormat: Text.PlainText
-                text: root.activeLeg && root.activeLeg.arrival ? root.activeLeg.arrival.code : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
-            }
-          }
-
-          Text {
-            Layout.fillWidth: true
-            visible: root.departureDetail() !== ""
-            textFormat: Text.PlainText
-            text: root.departureDetail()
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-          }
-
-          Text {
-            Layout.fillWidth: true
-            visible: root.lastError !== ""
-            textFormat: Text.PlainText
-            text: root.lastError
-            color: root.urgent
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
-
-          ColumnLayout {
-            Layout.fillWidth: true
-            visible: !!root.nextLeg
-            spacing: Style.space(4)
-
-            PanelSeparator {
-              Layout.fillWidth: true
-              foreground: root.foreground
-            }
-
-            RowLayout {
-              Layout.fillWidth: true
-
-              Text {
+              RowLayout {
                 Layout.fillWidth: true
-                textFormat: Text.PlainText
-                text: root.nextLeg ? "Then " + root.nextLeg.code + " · " + root.nextLeg.route : ""
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-                elide: Text.ElideRight
-              }
 
-              Text {
-                textFormat: Text.PlainText
-                text: root.nextLegStatus()
-                color: root.nextLegDelayed ? root.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: root.nextLegDelayed
-              }
-            }
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.activeLeg && root.activeLeg.departure ? root.activeLeg.departure.code : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
 
-            RowLayout {
-              Layout.fillWidth: true
+                Text {
+                  Layout.fillWidth: true
+                  text: root.progressPercent() + "% of this flight"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                  horizontalAlignment: Text.AlignHCenter
+                }
 
-              Text {
-                Layout.fillWidth: true
-                textFormat: Text.PlainText
-                text: root.nextLeg ? root.placeTimes(root.nextLeg.departure) : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: root.connectText()
-                color: root.journey.tightConnection ? root.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: !!root.journey.tightConnection
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.activeLeg && root.activeLeg.arrival ? root.activeLeg.arrival.code : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
             }
-          }
-
-          RowLayout {
-            Layout.fillWidth: true
 
             Text {
               Layout.fillWidth: true
+              visible: root.departureDetail() !== ""
               textFormat: Text.PlainText
-              text: root.loading ? "Updating…" : "Updated " + Qt.formatDateTime(new Date(root.report.generatedAtMs || Date.now()), "HH:mm")
-              color: root.dim
+              text: root.departureDetail()
+              color: root.foreground
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Style.font.bodySmall
             }
 
             Text {
-              visible: root.loading
-              text: "\uf2f1"
-              color: root.dim
-              font.family: root.iconFontFamily
-              font.pixelSize: Style.font.caption
+              Layout.fillWidth: true
+              visible: root.lastError !== ""
+              textFormat: Text.PlainText
+              text: root.lastError
+              color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
 
-              RotationAnimator on rotation {
-                running: root.loading && Style.reduceMotion !== true
-                from: 0
-                to: 360
-                duration: 900
-                loops: Animation.Infinite
+            ColumnLayout {
+              Layout.fillWidth: true
+              visible: !!root.nextLeg
+              spacing: Style.space(4)
+
+              PanelSeparator {
+                Layout.fillWidth: true
+                foreground: root.foreground
+              }
+
+              RowLayout {
+                Layout.fillWidth: true
+
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.PlainText
+                  text: root.nextLeg ? "Then " + root.nextLeg.code + " · " + root.nextLeg.route : ""
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.nextLegStatus()
+                  color: root.nextLegDelayed ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: root.nextLegDelayed
+                }
+              }
+
+              RowLayout {
+                Layout.fillWidth: true
+
+                Text {
+                  Layout.fillWidth: true
+                  textFormat: Text.PlainText
+                  text: root.nextLeg ? root.placeTimes(root.nextLeg.departure) : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.connectText()
+                  color: root.journey.tightConnection ? root.urgent : root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: !!root.journey.tightConnection
+                }
               }
             }
 
-            PanelActionButton {
-              visible: !!root.activeLeg
-              iconText: "\uf279"
-              tooltipText: "Live map (M)"
-              fontFamily: root.iconFontFamily
-              fontSize: Style.font.caption
-              foreground: root.dim
-              onClicked: root.openMap(root.activeLeg)
-            }
+            RowLayout {
+              Layout.fillWidth: true
 
-            PanelActionButton {
-              iconText: "\uf304"
-              tooltipText: "Edit trip (E)"
-              fontFamily: root.iconFontFamily
-              fontSize: Style.font.caption
-              foreground: root.dim
-              onClicked: root.editTrip()
+              Text {
+                Layout.fillWidth: true
+                textFormat: Text.PlainText
+                text: root.loading ? "Updating…" : "Updated " + Qt.formatDateTime(new Date(root.report.generatedAtMs || Date.now()), "HH:mm")
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                visible: root.loading
+                text: "\uf2f1"
+                color: root.dim
+                font.family: root.iconFontFamily
+                font.pixelSize: Style.font.caption
+
+                RotationAnimator on rotation {
+                  running: root.loading && Style.reduceMotion !== true
+                  from: 0
+                  to: 360
+                  duration: 900
+                  loops: Animation.Infinite
+                }
+              }
+
+              PanelActionButton {
+                visible: !!root.activeLeg
+                iconText: "\uf279"
+                tooltipText: "Live map (M)"
+                fontFamily: root.iconFontFamily
+                fontSize: Style.font.caption
+                foreground: root.dim
+                onClicked: root.openMap(root.activeLeg)
+              }
+
+              PanelActionButton {
+                iconText: "\uf304"
+                tooltipText: "Edit trip (E)"
+                fontFamily: root.iconFontFamily
+                fontSize: Style.font.caption
+                foreground: root.dim
+                onClicked: root.editTrip()
+              }
             }
           }
         }
