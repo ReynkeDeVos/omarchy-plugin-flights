@@ -35,6 +35,19 @@ class IconFontTests(unittest.TestCase):
                 f"{family} does not contain U+{codepoint.upper()}",
             )
 
+    def test_setup_icons_come_from_the_nerd_font_like_omarchy_panels(self):
+        setup = (PLUGIN_ROOT / "SetupView.qml").read_text(encoding="utf-8")
+        self.assertNotIn("iconFontFamily", setup)
+        for codepoint in sorted(set(re.findall(r"\\u(f[0-9a-fA-F]{3})", setup))):
+            families = subprocess.run(
+                ["fc-list", f":charset={codepoint}", "family"], check=True, capture_output=True, text=True
+            ).stdout
+            self.assertIn("Nerd Font", families, f"No Nerd Font contains U+{codepoint.upper()}")
+
+    def test_glyphs_are_escaped_so_editors_cannot_drop_them(self):
+        for path in PLUGIN_ROOT.glob("*.qml"):
+            self.assertIsNone(re.search("[\ue000-\uf8ff]", path.read_text(encoding="utf-8")), path.name)
+
 
 if __name__ == "__main__":
     unittest.main()
