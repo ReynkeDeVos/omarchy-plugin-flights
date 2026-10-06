@@ -30,18 +30,9 @@ I wanted to track my partner's flights, so we can stay in touch better during he
 
 ```bash
 omarchy plugin add https://github.com/ReynkeDeVos/omarchy-plugin-flights.git
-omarchy plugin enable reynkedevos.flights --section center
 ```
 
 Then click the suitcase in the bar, add the flights, and say how long it takes you to get to the airport. The pen in the panel (or `E`) edits the trip later.
-
-The trip lives in the widget's entry in `~/.config/omarchy/shell.json`, so you can also write it by hand:
-
-```json
-{ "id": "reynkedevos.flights", "legs": "LH400@2026-12-23,LH2054@2026-12-24", "leaveLeadMinutes": 60 }
-```
-
-Optional: `homeTimezone` (the system's), `refreshSeconds` (60), `notifications` (`true`).
 
 Left-click opens the panel, middle-click the live map, right-click refreshes. In the panel, `E` edits the trip, `M` opens the map, `R` refreshes and `Esc` closes; the setup works from the keyboard alone. A delay of 15 minutes or more turns the icon red; the warning triangle is only for cancellations, diversions and connections under an hour. Notifications cover takeoff, delays, gate changes, landing in 60/30/15 minutes, the transfer, when to leave, and arrival.
 
