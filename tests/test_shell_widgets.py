@@ -36,7 +36,8 @@ ShellRoot {
   id: harness
 
   readonly property string pluginDir: "file://" + Quickshell.env("FLIGHTS_PLUGIN_DIR")
-  readonly property bool replacementBar: Quickshell.env("FLIGHTS_BAR") === "replacement"
+  property bool replacementBar: Quickshell.env("FLIGHTS_BAR") === "replacement"
+  property var entry: JSON.parse(Quickshell.env("FLIGHTS_SETTINGS") || "{}")
   property var service: null
   property var widgets: []
   property var saved: null
@@ -47,7 +48,7 @@ ShellRoot {
   QtObject {
     id: pluginShell
     function serviceFor(id) { return harness.replacementBar ? null : harness.service }
-    function updateEntryInline(id, entry) { harness.saved = entry; harness.inject(entry); return true }
+    function updateEntryInline(id, entry) { harness.saved = entry; harness.entry = entry; harness.inject(entry); return true }
   }
 
   Component { id: monitor; FloatingWindow { implicitWidth: 420; implicitHeight: 640; visible: true } }
@@ -76,19 +77,27 @@ ShellRoot {
       service = serviceComponent.createObject(null)
       if (!service) console.log("HARNESS service failed: " + serviceComponent.errorString())
     }
+    createWidgets(Number(Quickshell.env("FLIGHTS_WIDGETS") || "1"))
+    console.log("HARNESS ready")
+  }
+
+  // Like the bar on each monitor: create the widgets, then hand over bar, name and settings.
+  function createWidgets(count) {
+    var manifest = JSON.parse(manifestFile.text())
     var widgetComponent = Qt.createComponent(pluginDir + "/" + manifest.entryPoints.barWidget, Component.PreferSynchronous)
     var created = []
-    for (var i = 0; i < Number(Quickshell.env("FLIGHTS_WIDGETS") || "1"); i++) {
+    for (var i = 0; i < count; i++) {
       var window = monitor.createObject(harness)
       var item = widgetComponent.createObject(window.contentItem)
       if (!item) console.log("HARNESS widget failed: " + widgetComponent.errorString())
       created.push({ item: item, window: window, api: barApi.createObject(null) })
     }
     widgets = created
-    var entry = JSON.parse(Quickshell.env("FLIGHTS_SETTINGS") || "{}")
-    Qt.callLater(function() { harness.inject(entry) })
-    console.log("HARNESS ready")
+    Qt.callLater(function() { harness.inject(harness.entry) })
   }
+
+  // A live switch of bars: the old bar's widgets go, the new bar creates its own.
+  Timer { id: switchTimer; interval: 200; property int count: 0; onTriggered: harness.createWidgets(count) }
 
   function descendants(item) {
     var all = [item]
@@ -143,6 +152,14 @@ ShellRoot {
     function close(index: int): void { harness.widgets[index].item.close() }
     function refresh(index: int): void { harness.widgets[index].item.refresh() }
     function collect(): void { gc() }
+    function serviceWatched(): string { return harness.service ? String(harness.service.watched) : "none" }
+    function switchBar(mode: string, count: int): void {
+      for (var i = 0; i < harness.widgets.length; i++) harness.widgets[i].window.destroy()
+      harness.widgets = []
+      harness.replacementBar = mode === "replacement"
+      switchTimer.count = count
+      switchTimer.restart()
+    }
     function editTrip(index: int): void { harness.widgets[index].item.editTrip() }
     function type(index: int, field: int, text: string): string {
       var fields = harness.textFields(index)
@@ -263,7 +280,9 @@ class Shell:
         return done.stdout.strip()
 
     def state(self, index: int = 0) -> dict:
-        return json.loads(self.call("state", index))
+        """The widget's state, or {} while there is no widget at that index (during a bar switch)."""
+        answer = self.call("state", index)
+        return json.loads(answer) if answer else {}
 
     def wait(self, condition, what: str, timeout: float = 20):
         deadline = time.monotonic() + timeout
@@ -321,7 +340,7 @@ class ShellTest(unittest.TestCase):
 
     def reported(self, shell: Shell, widgets: int = 1):
         for index in range(widgets):
-            shell.wait(lambda index=index: shell.state(index)["legs"] > 0 and not shell.state(index)["loading"],
+            shell.wait(lambda index=index: shell.state(index).get("legs", 0) > 0 and not shell.state(index)["loading"],
                        what=f"widget {index} to show the trip")
 
 
@@ -350,6 +369,21 @@ class SharedFeedTests(ShellTest):
         shell.wait(lambda: self.runs() == 4 and not shell.state(0)["loading"] and not shell.state(1)["loading"],
                    what="both widgets to refresh")
         self.assertEqual(len(shell.notifications()), 1)
+
+    def test_switching_to_a_replacement_bar_leaves_no_shared_feed_running(self):
+        shell = self.start(widgets=2)
+        self.reported(shell, 2)
+        self.assertEqual(shell.call("serviceWatched"), "true")
+        shell.call("switchBar", "replacement", 2)
+        shell.wait(lambda: shell.call("serviceWatched") == "false", what="the shared feed to stop")
+        self.reported(shell, 2)
+        before = self.runs()
+        shell.call("refresh", 0)
+        shell.call("refresh", 1)
+        shell.wait(lambda: self.runs() == before + 2 and not shell.state(0)["loading"] and not shell.state(1)["loading"],
+                   what="each widget's own run")
+        time.sleep(0.5)
+        self.assertEqual(self.runs(), before + 2)
 
     def test_opening_the_panel_reuses_a_fresh_report(self):
         shell = self.start()

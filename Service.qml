@@ -12,6 +12,11 @@ Item {
 
   // The widget's entry from shell.json; the widgets hand it over.
   property var settings: ({})
+  // The widgets showing this feed. With none left, for example after a switch
+  // to a replacement bar whose widgets load their own copy, it stops refreshing.
+  property var widgets: []
+  readonly property bool watched: widgets.length > 0
+  readonly property int shortestRefreshSeconds: 30
 
   property var report: emptyReport()
   property bool loading: false
@@ -22,7 +27,7 @@ Item {
 
   readonly property string configuredLegs: String(setting("legs", ""))
   readonly property bool needsSetup: configuredLegs.trim() === ""
-  readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
+  readonly property int refreshSeconds: Math.max(shortestRefreshSeconds, parseInt(setting("refreshSeconds", 60), 10) || 60)
   readonly property int leaveLeadMinutes: Math.max(0, parseInt(setting("leaveLeadMinutes", 60), 10) || 0)
   // Empty means the system zone; the report names the zone the backend actually used.
   readonly property string homeTimezone: String(setting("homeTimezone", ""))
@@ -36,6 +41,14 @@ Item {
     return value === undefined || value === null ? fallback : value
   }
 
+  function attach(widget) {
+    if (widgets.indexOf(widget) === -1) widgets = widgets.concat([widget])
+  }
+
+  function detach(widget) {
+    widgets = widgets.filter(function(item) { return item !== widget })
+  }
+
   function emptyReport() {
     return { "legs": [], "journey": {}, "events": [], "errors": [] }
   }
@@ -47,7 +60,7 @@ Item {
   }
 
   function refresh() {
-    if (root.needsSetup) return
+    if (root.needsSetup || !root.watched) return
     if (fetchProc.running) {
       refreshQueued = true
       return
@@ -61,7 +74,7 @@ Item {
   // Opening a panel shows what is there; a report younger than the shortest
   // refresh interval, or one on its way, is fresh enough.
   function refreshIfStale() {
-    if (!loading && Date.now() - reportAt >= 30000) refresh()
+    if (!loading && Date.now() - reportAt >= shortestRefreshSeconds * 1000) refresh()
   }
 
   // A saved trip starts over, unless its first run is already under way.
@@ -123,7 +136,7 @@ Item {
   // Ticks the leave-by countdown between refreshes, while there is one to tick.
   Timer {
     interval: 30000
-    running: !!root.pickup.leaveEpochMs && !root.pickup.done
+    running: root.watched && !!root.pickup.leaveEpochMs && !root.pickup.done
     repeat: true
     onRunningChanged: root.now = Date.now()
     onTriggered: root.now = Date.now()
@@ -131,7 +144,7 @@ Item {
 
   Timer {
     interval: root.refreshSeconds * 1000
-    running: !root.needsSetup
+    running: root.watched && !root.needsSetup
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refresh()
