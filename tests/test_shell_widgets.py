@@ -103,12 +103,18 @@ ShellRoot {
   }
 
   function setupView(index) {
-    return find(index, function(item) { return typeof item.addFlight === "function" && item.visible })
+    return find(index, function(item) { return typeof item.addFlight === "function" })
   }
 
   function textFields(index) {
     var view = setupView(index)
     return view ? descendants(view).filter(function(item) { return item.placeholderText !== undefined && item.selectAll }) : []
+  }
+
+  function focusedText(index) {
+    for (var probe = widgets[index].item.Window.activeFocusItem; probe; probe = probe.parent)
+      if (probe.placeholderText !== undefined && probe.selectAll) return probe.text
+    return ""
   }
 
   function describeFocus(index) {
@@ -128,6 +134,7 @@ ShellRoot {
         opened: widget.opened, setupShown: widget.setupShown, editing: widget.editingTrip,
         loading: widget.loading, legs: widget.report.legs.length, stage: widget.report.journey.stage || "",
         lastError: widget.lastError, items: harness.descendants(widget).length, focus: harness.describeFocus(index),
+        focusText: harness.focusedText(index),
         setupLegs: view ? view.legs.length : -1, setupStep: view ? view.step : 0, setupError: view ? view.error : "",
         looking: view ? view.looking : false, saved: harness.saved
       })
@@ -302,7 +309,9 @@ class ShellTest(unittest.TestCase):
 
     def assert_quiet(self, shell: Shell):
         """No QML warning may come from the plugin's own files."""
-        noisy = [line for line in shell.output().splitlines() if any(name in line for name in PLUGIN_QML)]
+        output = shell.output()
+        shell.log.close()
+        noisy = [line for line in output.splitlines() if any(name in line for name in PLUGIN_QML)]
         self.assertEqual(noisy, [])
 
     def runs(self) -> int:
@@ -350,6 +359,42 @@ class SharedFeedTests(ShellTest):
         self.assertEqual(self.runs(), 1)
         shell.call("refresh", 0)  # R and right-click still ask for one
         shell.wait(lambda: self.runs() == 2, what="the requested refresh")
+
+
+class OnDemandPanelTests(ShellTest):
+    def test_panel_content_exists_only_while_the_panel_shows(self):
+        shell = self.start(widgets=2)
+        self.reported(shell, 2)
+        # Offscreen, only the last window is active and can report focus, so widget 1 opens.
+        closed = shell.state(1)["items"]
+        shell.call("open", 1)
+        opened = shell.state(1)["items"]
+        self.assertGreater(opened, closed + 20)
+        self.assertEqual(shell.state(0)["items"], closed, "the other monitor's panel stays empty")
+        shell.call("close", 1)
+        self.assertEqual(shell.state(1)["items"], opened, "still there while it fades out")
+        shell.wait(lambda: shell.state(1)["items"] == closed, what="the content to go after the fade")
+        shell.call("open", 1)
+        self.assertEqual(shell.state(1)["items"], opened)
+        shell.wait(lambda: shell.state(1)["focus"] == "PanelKeyCatcher", what="focus in the reopened panel")
+
+    def test_a_first_run_setup_keeps_its_flights_and_typing_while_closed(self):
+        shell = self.start(legs="")
+        empty = shell.state()["items"]
+        shell.call("open", 0)
+        shell.wait(lambda: shell.state()["focus"] == "field:Flight, e.g. LH400", what="the setup")
+        shell.call("type", 0, 0, "LH2002")
+        shell.call("type", 0, 1, "2026-12-23")
+        shell.call("setup", 0, "add")
+        shell.wait(lambda: shell.state()["setupLegs"] == 1, what="the looked-up flight")
+        shell.call("type", 0, 0, "LH10")
+        shell.call("close", 0)
+        time.sleep(0.5)
+        shell.call("open", 0)
+        shell.wait(lambda: shell.state()["focus"] == "field:Next flight", what="focus back in the flight field")
+        state = shell.state()
+        self.assertEqual((state["setupLegs"], state["focusText"]), (1, "LH10"))
+        self.assertGreater(state["items"], empty)
 
 
 class SetupTests(ShellTest):
