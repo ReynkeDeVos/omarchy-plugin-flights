@@ -3,7 +3,6 @@
 I wanted to track my partner's flights, so we can stay in touch better during her long trips (like Germany to Japan). This Omarchy bar widget follows one dated trip of up to two flights and tells me when to leave for the airport.
 
 <a href="https://reynkedevos.github.io/omarchy-plugin-flights/"><img src="docs/assets/demo.avif" alt="The widget follows her flight, its delays and the connection, until she has landed"></a>
-
 <sub><a href="https://reynkedevos.github.io/omarchy-plugin-flights/">Watch with sound</a></sub>
 
 <p>
