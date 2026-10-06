@@ -2,17 +2,28 @@
 
 I wanted to track my partner's flights, so we can stay in touch better during her long trips (like Germany to Japan). This Omarchy bar widget follows one dated trip of up to two flights and tells me when to leave for the airport.
 
+<a href="docs/video/demo.mp4"><img src="docs/assets/demo.avif" alt="The widget follows her flight, its delays and the connection, until she has landed"></a>
+
+<sub><a href="docs/video/demo.mp4">Video with sound (MP4)</a></sub>
+
+<p>
+  <img src="docs/assets/en-route.avif" width="350" alt="En route: countdown to landing, leave-by time, flight progress and the connecting flight">
+  <img src="docs/assets/arrived.avif" width="350" alt="Arrived: terminal, gate and baggage belt">
+</p>
+
+<details>
+<summary>More screenshots</summary>
+
 <p>
   <img src="docs/assets/boarding.avif" width="350" alt="Boarding soon: gate and terminal">
   <img src="docs/assets/departing.avif" width="350" alt="Takeoff in a few minutes">
-  <img src="docs/assets/en-route.avif" width="350" alt="En route: countdown to landing, leave-by time, flight progress and the connecting flight">
   <img src="docs/assets/delayed.avif" width="350" alt="Delayed in the air: the plane turns red">
   <img src="docs/assets/landing.avif" width="350" alt="On approach: landing in under an hour">
   <img src="docs/assets/connection-risk.avif" width="350" alt="Connection in danger: the delay leaves less than an hour to change planes">
   <img src="docs/assets/transfer.avif" width="350" alt="Transfer: countdown to the connecting flight">
   <img src="docs/assets/disrupted.avif" width="350" alt="A cancelled flight">
-  <img src="docs/assets/arrived.avif" width="350" alt="Arrived: terminal, gate and baggage belt">
 </p>
+</details>
 
 <sub>Real Lufthansa flights on 6 October 2026.</sub>
 
