@@ -6,6 +6,7 @@ I wanted to track my partner's flights, so we can stay in touch better during he
   <img src="docs/assets/boarding.avif" width="350" alt="Boarding soon: gate and terminal">
   <img src="docs/assets/departing.avif" width="350" alt="Takeoff in a few minutes">
   <img src="docs/assets/en-route.avif" width="350" alt="En route: countdown to landing, leave-by time, flight progress and the connecting flight">
+  <img src="docs/assets/delayed.avif" width="350" alt="Delayed in the air: minutes late and a shrinking connection">
   <img src="docs/assets/landing.avif" width="350" alt="On approach: landing in under an hour">
   <img src="docs/assets/transfer.avif" width="350" alt="Transfer: countdown to the connecting flight">
   <img src="docs/assets/disrupted.avif" width="350" alt="A cancelled flight">

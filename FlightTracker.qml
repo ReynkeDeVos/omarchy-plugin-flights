@@ -21,6 +21,7 @@ Panel {
   readonly property int activeLegIndex: Number(journey.activeLegIndex || 0)
   readonly property var activeLeg: activeLegIndex >= 0 && activeLegIndex < legs.length ? legs[activeLegIndex] : null
   readonly property var nextLeg: activeLegIndex + 1 < legs.length ? legs[activeLegIndex + 1] : null
+  readonly property int activeDelay: delayMinutes(activeLeg)
     readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
   readonly property string configuredLegs: String(setting("legs", ""))
   readonly property int leaveLeadMinutes: Math.max(0, parseInt(setting("leaveLeadMinutes", 60), 10) || 0)
@@ -150,11 +151,17 @@ Panel {
     return Math.max(0, Math.min(100, Math.round(Number(activeLeg.progress.percent || 0))))
   }
 
+  // Once airborne only the arrival delay matters; before that, the worse of both.
+  function delayMinutes(leg) {
+    if (!leg) return 0
+    var arrival = Number(leg.arrivalDelayMinutes || 0)
+    return leg.departed ? arrival : Math.max(Number(leg.departureDelayMinutes || 0), arrival)
+  }
+
   function nextLegStatus() {
     if (!nextLeg) return ""
     if (nextLeg.cancelled) return "Cancelled"
-    var delay = Math.max(Number(nextLeg.departureDelayMinutes || 0),
-                         Number(nextLeg.arrivalDelayMinutes || 0))
+    var delay = delayMinutes(nextLeg)
     if (delay >= 5) return delay + " min late"
     return "On time"
   }
@@ -364,8 +371,9 @@ Panel {
               Text {
                 Layout.fillWidth: true
                 textFormat: Text.PlainText
-                text: root.activeLeg ? root.activeLeg.code + " · " + root.activeLeg.route : "Updating…"
-                color: root.dim
+                text: root.activeLeg ? root.activeLeg.code + " · " + root.activeLeg.route
+                  + (root.activeDelay >= 5 ? " · " + root.activeDelay + " min late" : "") : "Updating…"
+                color: root.activeDelay >= 5 ? root.urgent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideRight
