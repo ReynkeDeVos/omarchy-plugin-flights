@@ -15,6 +15,7 @@ Panel {
   property bool keepSetup: false
   // The bar hands the settings over after creating the widget; until then there is nothing to pass on.
   property bool configured: false
+  property QtObject attachedFeed: null
 
   // One feed for every monitor: the host's service under the built-in bar. A
   // replacement bar keeps services from its widgets, so there each loads its own.
@@ -243,7 +244,14 @@ Panel {
     configured = true
     if (feed) feed.settings = settings
   }
-  onFeedChanged: if (feed && configured) feed.settings = settings
+  onFeedChanged: {
+    if (attachedFeed) attachedFeed.detach(root)
+    attachedFeed = feed
+    if (!feed) return
+    feed.attach(root)
+    if (configured) feed.settings = settings
+  }
+  Component.onDestruction: if (attachedFeed) attachedFeed.detach(root)
 
   onOpenedChanged: {
     if (!opened) {
