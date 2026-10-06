@@ -7,13 +7,13 @@ import qs.Commons
 import qs.Ui
 
 // Trip setup in two steps: the flights, then the time it takes to get to the
-// airport. Each flight goes through `flight_status.py --lookup`, so only
+// airport. Each flight goes through `bin/flight-status --lookup`, so only
 // flights FlightStats knows reach the list. A form, so Tab walks every
 // control; Esc leaves the setup from anywhere.
 ColumnLayout {
   id: root
 
-  property string scriptPath: ""
+  property string backendPath: ""
   property string homeTimezone: ""
   property color foreground: Color.foreground
   property color dim: Qt.darker(foreground, 1.5)
@@ -96,7 +96,7 @@ ColumnLayout {
     error = ""
     pendingCode = code
     pendingDate = date
-    lookupProc.command = ["python3", scriptPath, "--lookup", code + "@" + date, "--home-timezone", homeTimezone]
+    lookupProc.command = [backendPath, "--lookup", code + "@" + date, "--home-timezone", homeTimezone]
     lookupProc.running = true
   }
 

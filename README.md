@@ -37,3 +37,16 @@ Then click the suitcase in the bar, add the flights, and say how long it takes y
 Left-click opens the panel, middle-click the live map, right-click refreshes. In the panel, `E` edits the trip, `M` opens the map, `R` refreshes and `Esc` closes; the setup works from the keyboard alone. A delay of 15 minutes or more turns the icon red; the warning triangle is only for cancellations, diversions and connections under an hour. Notifications cover takeoff, delays, gate changes, landing in 60/30/15 minutes, the transfer, when to leave, and arrival.
 
 Data comes from FlightStats and adsb.lol/adsbdb without API keys. It can be late or wrong, so check with the airline before you drive.
+
+## Building the backend
+
+The widget is QML. The flight data comes from `bin/flight-status`, a small Rust program that prints one JSON report and exits. `omarchy plugin add` and `omarchy plugin update` only fetch files and build nothing, so the built program (x86_64 Linux) is committed next to its source. After changing `src/`, rebuild it and commit both:
+
+```bash
+cargo build --release --locked
+install -m 755 target/release/flight-status bin/flight-status
+```
+
+On another architecture, build it the same way and copy it into `~/.config/omarchy/plugins/reynkedevos.flights/bin/`. Before `omarchy plugin update`, put the shipped one back with `git -C ~/.config/omarchy/plugins/reynkedevos.flights checkout bin/flight-status`, then build and copy again.
+
+Checks: `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings` and `cargo test --locked`. `python3 -B -m unittest discover -s tests` follows whole trips offline through both `bin/flight-status` and the last Python backend in `tests/reference` and expects the same output, files and requests.
