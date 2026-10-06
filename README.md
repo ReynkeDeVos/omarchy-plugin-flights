@@ -2,9 +2,7 @@
 
 I wanted to track my partner's flights, so we can stay in touch better during her long trips (like Germany to Japan). This Omarchy bar widget follows one dated trip of up to two flights and tells me when to leave for the airport.
 
-<a href="docs/video/demo.mp4"><img src="docs/assets/demo.avif" alt="The widget follows her flight, its delays and the connection, until she has landed"></a>
-
-<sub><a href="docs/video/demo.mp4">Video with sound (MP4)</a></sub>
+https://github.com/user-attachments/assets/c6947b48-bb07-4628-b421-7f2a4434c5b7
 
 <p>
   <img src="docs/assets/en-route.avif" width="350" alt="En route: countdown to landing, leave-by time, flight progress and the connecting flight">
