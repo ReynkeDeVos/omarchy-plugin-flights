@@ -23,7 +23,7 @@ Panel {
   readonly property int activeLegIndex: Number(journey.activeLegIndex || 0)
   readonly property var activeLeg: activeLegIndex >= 0 && activeLegIndex < legs.length ? legs[activeLegIndex] : null
   readonly property var nextLeg: activeLegIndex + 1 < legs.length ? legs[activeLegIndex + 1] : null
-  // Python decides what counts as late, so the red icon and the delay notification agree.
+  // The backend decides what counts as late, so the red icon and the delay notification agree.
   readonly property int activeDelay: activeLeg ? Number(activeLeg.delayMinutes || 0) : 0
   readonly property bool activeLate: !!(activeLeg && activeLeg.late)
   readonly property int refreshSeconds: Math.max(30, parseInt(setting("refreshSeconds", 60), 10) || 60)
@@ -35,10 +35,11 @@ Panel {
   readonly property real leaveMinutes: pickup.leaveEpochMs ? Math.round((pickup.leaveEpochMs - clock.now) / 60000) : NaN
   readonly property bool leaveSoon: !pickup.done && isFinite(leaveMinutes) && leaveMinutes <= 15 && leaveMinutes > -90
   readonly property bool transferring: journey.stage === "connection" && activeLeg && activeLeg.phase === "scheduled"
-  // Empty means the system zone; the report names the zone Python actually used.
+  // Empty means the system zone; the report names the zone the backend actually used.
   readonly property string homeTimezone: String(setting("homeTimezone", ""))
   readonly property bool notificationsEnabled: setting("notifications", true) === true
-  readonly property string scriptPath: decodeURIComponent(String(Qt.resolvedUrl("bin/flight_status.py")).replace(/^file:\/\//, ""))
+  // The prebuilt Rust backend; it answers and exits, so nothing stays running between refreshes.
+  readonly property string backendPath: decodeURIComponent(String(Qt.resolvedUrl("bin/flight-status")).replace(/^file:\/\//, ""))
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.5)
@@ -61,7 +62,7 @@ Panel {
     }
     loading = true
     lastError = ""
-    var command = ["python3", root.scriptPath, "--legs", root.configuredLegs,
+    var command = [root.backendPath, "--legs", root.configuredLegs,
                    "--home-timezone", root.homeTimezone,
                    "--leave-lead-minutes", String(root.leaveLeadMinutes)]
     fetchProc.command = command
@@ -375,7 +376,7 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         visible: root.setupShown
-        scriptPath: root.scriptPath
+        backendPath: root.backendPath
         homeTimezone: root.homeTimezone
         foreground: root.foreground
         dim: root.dim

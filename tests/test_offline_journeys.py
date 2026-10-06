@@ -18,7 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_BACKEND = ROOT / "bin"
+PYTHON_BACKEND = ROOT / "tests" / "reference"  # the last Python backend, kept to compare against
 HOME = "Europe/Berlin"
 
 # Runs the Python backend with the test clock and every request sent to the stand-in.
@@ -38,8 +38,15 @@ sys.exit(flight_status.main(sys.argv[1:]))
 """
 
 
+RUST_BACKEND = ROOT / "bin" / "flight-status"
+
+
 def backends() -> dict[str, list[str]]:
-    return {"python": [sys.executable, "-I", "-B", "-c", BOOTSTRAP, str(PYTHON_BACKEND)]}
+    """The Python reference and the shipped Rust binary; every step must agree."""
+    return {
+        "python": [sys.executable, "-I", "-B", "-c", BOOTSTRAP, str(PYTHON_BACKEND)],
+        "rust": [str(RUST_BACKEND)],
+    }
 
 
 def at(text: str) -> dt.datetime:
@@ -191,6 +198,20 @@ def read_tree(root: Path) -> dict[str, object]:
     return files
 
 
+def without_error_text(value):
+    """The same JSON with every error message blanked, for failures whose wording comes from a JSON decoder."""
+    if isinstance(value, dict):
+        return {
+            key: "<error>" if key == "error" and isinstance(item, str)
+            else [line.split(":")[0] + ": <error>" for line in item] if key == "errors"
+            else without_error_text(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [without_error_text(item) for item in value]
+    return value
+
+
 def typed(value):
     """JSON with its types spelled out, so 1, 1.0, true and null never compare equal."""
     if isinstance(value, dict):
@@ -238,7 +259,9 @@ class OfflineBackendTest(unittest.TestCase):
             **extra,
         }
 
-    def run_backends(self, *args: str, now: dt.datetime, env: dict[str, str] | None = None) -> Run:
+    def run_backends(
+        self, *args: str, now: dt.datetime, env: dict[str, str] | None = None, error_text: bool = True
+    ) -> Run:
         runs = {}
         for name, command in backends().items():
             self.feeds.requests = []
@@ -254,7 +277,10 @@ class OfflineBackendTest(unittest.TestCase):
         for name, other in runs.items():
             context = f"{name} differs from {first_name} for {args} at {now}"
             self.assertEqual(other.code, first.code, context)
-            self.assertEqual(typed(other.json), typed(first.json), context)
+            output, expected = (other.json, first.json) if error_text else (
+                without_error_text(other.json), without_error_text(first.json)
+            )
+            self.assertEqual(typed(output), typed(expected), context)
             self.assertEqual(typed(other.files), typed(first.files), context)
             self.assertEqual(other.requests, first.requests, context)
         return first
@@ -460,6 +486,13 @@ class LookupTests(OfflineBackendTest):
         self.assertEqual(found.json["departure"]["homeTime"], "11:30")
         self.assertEqual(list(found.files), ["cache/omarchy-flights/journey-LH2002-2026-12-23.json"])
 
+    def test_lookup_leaves_a_running_trip_alone(self):
+        self.feeds.flight(A, flight("FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00"))
+        self.feeds.flight(B, flight("MUC", "DXB", "2026-12-23T10:30", "2026-12-23T16:30"))
+        before = self.trip(A, at("2026-12-23T06:00")).files["state/omarchy-flights/state.json"]
+        after = self.run_backends("--lookup", B, now=at("2026-12-23T07:00")).files
+        self.assertEqual(after["state/omarchy-flights/state.json"], before)
+
     def test_lookup_explains_what_it_cannot_find(self):
         unreadable = self.run_backends("--lookup", "LH2002@2026-13-01", now=at("2026-12-20T12:00"))
         self.assertEqual(
@@ -499,7 +532,10 @@ class FeedFailureTests(OfflineBackendTest):
         self.feeds.flight(A, None)
         self.feeds.routes[flightstats_path(B)] = (200, b"<html>no data</html>")
         self.feeds.routes[flightstats_path(C)] = (200, page(None, tail="")[:-1])
-        run = self.trip(",".join([A, B, C]), at("2026-12-23T06:00"))
+        # Python's and Rust's JSON decoders word a broken page differently; everything else must match.
+        run = self.run_backends(
+            "--legs", ",".join([A, B, C]), "--home-timezone", HOME, now=at("2026-12-23T06:00"), error_text=False
+        )
         self.assertEqual(
             run.json["errors"],
             [
@@ -518,6 +554,76 @@ class FeedFailureTests(OfflineBackendTest):
             page(flight("FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00"), tail='; window.x = {"a": 1};</script>'),
         )
         self.assertEqual(self.trip(A, at("2026-12-23T06:00")).json["legs"][0]["route"], "FRA → MUC")
+
+
+class EdgeCaseTests(OfflineBackendTest):
+    def age(self, relative: str, seconds: int):
+        """Backdates a cache file in every backend's tree."""
+        for root in self.roots.values():
+            path = root / relative
+            stamp = path.stat().st_mtime - seconds
+            os.utime(path, (stamp, stamp))
+
+    def test_home_times_across_the_end_of_summer_time(self):
+        # Berlin falls back at 01:00 UTC on 25 October 2026: 02:30 happens twice.
+        key = "LH9001@2026-10-25"
+        self.feeds.flight(key, flight("FRA", "MUC", "2026-10-25T00:30", "2026-10-25T02:30"))
+        evening = self.trip(key, at("2026-10-24T21:30"))
+        self.assertEqual(
+            (evening.json["legs"][0]["departure"]["homeTime"], evening.json["legs"][0]["arrival"]["homeTime"]),
+            ("02:30", "03:30"),
+        )
+        self.assertEqual((evening.json["pickup"]["leaveHomeTime"], evening.json["pickup"]["leaveMinutes"]), ("Sun 02:30", 240))
+        night = self.trip(key, at("2026-10-24T22:00"))
+        self.assertEqual(night.json["pickup"]["leaveHomeTime"], "02:30")
+
+    def test_half_minutes_round_to_even_like_python(self):
+        self.feeds.flight(A, flight("FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00"))
+        self.assertEqual(self.trip(A, at("2026-12-23T06:00:30")).json["journey"]["nextEventMinutes"], 120)  # 119.5
+        self.assertEqual(self.trip(A, at("2026-12-23T06:01:30")).json["journey"]["nextEventMinutes"], 118)  # 118.5
+
+    def test_cached_routes_and_pinned_callsigns_expire(self):
+        self.feeds.flight(A, flight(
+            "FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00", est_departure="2026-12-23T08:10",
+            est_arrival="2026-12-23T09:05", departed=True,
+        ))
+        self.feeds.route("LH1001", "DLH1001", "FRA", "MUC")
+        # The aircraft answers under the route's callsign but transmits another one, which gets pinned.
+        self.feeds.aircraft("DLH1001", flight="DLH1AB", hex="3c6444", lat=49.2, lon=10.1, alt_baro="ground", baro_rate=0)
+        first = self.trip(A, at("2026-12-23T08:20"))
+        self.assertEqual(first.json["legs"][0]["aircraft"], {"callsign": "DLH1AB", "hex": "3c6444"})
+        self.assertEqual(first.files["cache/omarchy-flights/pin-LH1001.json"], "DLH1AB")
+        self.assertEqual(sum(first.requests.values()), 3)
+
+        # The pin is tried before the route's callsign; the route comes from the cache.
+        second = self.trip(A, at("2026-12-23T08:25"))
+        self.assertEqual(
+            sorted(second.requests), ["/v2/callsign/DLH1001", "/v2/callsign/DLH1AB", flightstats_path(A)]
+        )
+
+        self.age("cache/omarchy-flights/pin-LH1001.json", 3 * 3600 + 60)
+        self.age("cache/omarchy-flights/route-LH1001.json", 7 * 24 * 3600 + 60)
+        third = self.trip(A, at("2026-12-23T08:30"))
+        self.assertEqual(sorted(third.requests), ["/v0/callsign/LH1001", "/v2/callsign/DLH1001", flightstats_path(A)])
+
+    def test_adsbdb_misses_are_cached_but_failures_are_not(self):
+        self.feeds.flight(A, flight(
+            "FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00", departed=True, callsign="DLH1001",
+        ))
+        self.feeds.routes["/v0/callsign/LH1001"] = (500, b"oops")
+        failed = self.trip(A, at("2026-12-23T08:20"))
+        self.assertNotIn("cache/omarchy-flights/route-LH1001.json", failed.files)
+        self.feeds.route("LH1001", None)
+        missed = self.trip(A, at("2026-12-23T08:21"))
+        self.assertEqual(missed.files["cache/omarchy-flights/route-LH1001.json"], {})
+        self.assertEqual(missed.json["legs"][0]["aircraft"], {"callsign": "DLH1001", "hex": None})
+
+    def test_a_page_larger_than_the_limit_is_cut_off(self):
+        padding = b"<!-- " + b"x" * 2_600_000 + b" -->"
+        record = flight("FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00")
+        self.feeds.routes[flightstats_path(A)] = (200, padding + page(record))
+        run = self.trip(A, at("2026-12-23T06:00"))
+        self.assertEqual(run.json["errors"], ["LH1001: the dated flight record was not present"])
 
 
 class CommandLineTests(OfflineBackendTest):
