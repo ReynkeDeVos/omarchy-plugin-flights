@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "reynkedevos.flights",
+  "name": "Flights",
+  "version": "1.1.0",
+  "author": "Reynke De Vos",
+  "license": "MIT",
+  "description": "Track a dated multi-leg trip in the bar: live status icons, transfer time, a leave-for-pickup time, and milestone notifications.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "FlightTracker.qml"
+  },
+  "barWidget": {
+    "displayName": "Flights",
+    "description": "Track a dated multi-leg journey with live progress and arrival notifications.",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "legs": "",
+      "homeTimezone": "Europe/Berlin",
+      "refreshSeconds": 60,
+      "notifications": true,
+      "leaveLeadMinutes": 60
+    },
+    "schema": [
+      {
+        "key": "legs",
+        "type": "string",
+        "label": "Dated flight legs",
+        "description": "Comma-separated flight@date values, for example LH400@2026-12-23,LH2054@2026-12-24.",
+        "defaultValue": ""
+      },
+      {
+        "key": "homeTimezone",
+        "type": "string",
+        "label": "Home timezone",
+        "description": "IANA timezone used for your landing clock, for example Europe/Berlin.",
+        "defaultValue": "Europe/Berlin"
+      },
+      {
+        "key": "leaveLeadMinutes",
+        "type": "integer",
+        "label": "Leave before landing",
+        "description": "Minutes before the final landing that you need to leave home for pickup.",
+        "min": 0,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 60
+      },
+      {
+        "key": "refreshSeconds",
+        "type": "integer",
+        "label": "Refresh interval",
+        "description": "Seconds between public-feed updates.",
+        "min": 30,
+        "max": 900,
+        "step": 30,
+        "defaultValue": 60
+      },
+      {
+        "key": "notifications",
+        "type": "boolean",
+        "label": "Journey notifications",
+        "description": "Notify for departure, delays, gate changes, landing proximity, transfer, leave-for-pickup reminders, and arrival.",
+        "defaultValue": true
+      }
+    ]
+  }
+}
