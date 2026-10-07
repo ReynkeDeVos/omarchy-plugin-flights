@@ -330,7 +330,7 @@ fn enrich_with_adsb(record: &mut Value, context: &Context) {
         cancelled,
         landed,
         departed,
-        start: None,
+        start: from_epoch_ms(field(field(record, "departure"), "epochMs")),
         end: from_epoch_ms(eta),
         vertical_rate,
         altitude,

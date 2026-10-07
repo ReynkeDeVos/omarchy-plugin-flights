@@ -355,11 +355,17 @@ impl Situation {
             if remaining.is_some_and(|minutes| minutes <= 15.0) {
                 return "final-approach";
             }
+            // Low or sinking means arriving only past halfway, not while climbing out.
+            let homebound = self
+                .start
+                .zip(self.end)
+                .is_none_or(|(start, end)| minutes_between(start, now) > minutes_between(now, end));
             if remaining.is_some_and(|minutes| minutes <= 60.0)
-                || self.vertical_rate.is_some_and(|rate| rate < -300.0)
-                || self
-                    .altitude
-                    .is_some_and(|feet| feet < 10_000.0 && feet > 0.0)
+                || homebound
+                    && (self.vertical_rate.is_some_and(|rate| rate < -300.0)
+                        || self
+                            .altitude
+                            .is_some_and(|feet| feet < 10_000.0 && feet > 0.0))
             {
                 return "arriving";
             }
@@ -1104,6 +1110,21 @@ mod tests {
             ..Situation::default()
         };
         assert_eq!(flight.phase(now), "scheduled");
+    }
+
+    #[test]
+    fn climbing_out_is_not_arriving() {
+        let now = at("2026-10-07T16:29:00Z");
+        let flight = Situation {
+            departed: true,
+            start: Some(at("2026-10-07T16:21:00Z")),
+            end: Some(at("2026-10-08T02:30:00Z")),
+            altitude: Some(6_000.0),
+            ..Situation::default()
+        };
+        assert_eq!(flight.phase(now), "airborne");
+        let descending = at("2026-10-08T01:00:00Z");
+        assert_eq!(flight.phase(descending), "arriving");
     }
 
     #[test]

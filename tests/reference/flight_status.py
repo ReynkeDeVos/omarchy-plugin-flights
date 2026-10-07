@@ -166,10 +166,14 @@ def phase_for(
     if departed:
         if remaining is not None and remaining <= 15:
             return "final-approach"
-        if (
-            (remaining is not None and remaining <= 60)
-            or (vertical_rate is not None and vertical_rate < -300)
-            or (altitude is not None and altitude < 10_000 and altitude > 0)
+        # Low or sinking means arriving only past halfway, not while climbing out.
+        homebound = not (start and end) or now - start > end - now
+        if (remaining is not None and remaining <= 60) or (
+            homebound
+            and (
+                (vertical_rate is not None and vertical_rate < -300)
+                or (altitude is not None and altitude < 10_000 and altitude > 0)
+            )
         ):
             return "arriving"
         return "airborne"
@@ -285,11 +289,13 @@ def enrich_with_adsb(record: dict[str, Any], now: dt.datetime) -> dict[str, Any]
 
     end_ms = (record.get("progress") or {}).get("etaEpochMs")
     end = dt.datetime.fromtimestamp(end_ms / 1000, dt.timezone.utc) if end_ms else None
+    start_ms = (record.get("departure") or {}).get("epochMs")
+    start = dt.datetime.fromtimestamp(start_ms / 1000, dt.timezone.utc) if start_ms else None
     record["phase"] = phase_for(
         cancelled=bool(record.get("cancelled")),
         landed=bool(record.get("landed")),
         departed=bool(record.get("departed")),
-        start=None,
+        start=start,
         end=end,
         now=now,
         vertical_rate=int(vertical_rate) if isinstance(vertical_rate, (int, float)) else None,
