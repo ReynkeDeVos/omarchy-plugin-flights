@@ -280,7 +280,7 @@ Panel {
     text: root.iconGlyph()
     fontFamily: root.iconFontFamily
     slotSize: Style.bar.statusSlot
-    fontSize: Style.font.body
+    fontSize: Style.font.caption
     active: root.hasAlert || root.approaching || root.leaveSoon || root.transferring || root.boardingAttention
       || root.departureAttention || root.activeLate || root.journey.stage === "complete"
     activeColor: root.iconColor()
