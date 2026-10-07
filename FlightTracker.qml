@@ -114,11 +114,11 @@ Panel {
     if (hasAlert || (activeLeg && activeLeg.phase === "cancelled")) return "\uf071"
     if (journey.stage === "complete" || (activeLeg && activeLeg.phase === "landed")) return "\uf058"
     if (leaveSoon) return "\uf1b9"
-    if (transferring) return "\uf362"
+    if (transferring) return "\uf0ec"
     if (!activeLeg || activeLeg.phase === "scheduled") return "\uf0f2"
     if (boardingAttention) return "\uf145"
-    if (departureAttention) return "\uf5b0"
-    if (approaching) return "\uf5af"
+    if (departureAttention) return "\u{f05d5}"
+    if (approaching) return "\u{f05d4}"
     if (activeLeg.phase === "airborne") return "\uf072"
     return "\uf017"
   }
@@ -278,7 +278,6 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: root.iconGlyph()
-    fontFamily: root.iconFontFamily
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption
     active: root.hasAlert || root.approaching || root.leaveSoon || root.transferring || root.boardingAttention
@@ -375,7 +374,7 @@ Panel {
               Text {
                 text: root.iconGlyph()
                 color: root.iconColor()
-                font.family: root.iconFontFamily
+                font.family: root.fontFamily
                 font.pixelSize: Style.font.title
               }
 
