@@ -54,6 +54,9 @@ Panel {
   readonly property bool departureAttention: activeLeg
     && ["departing-soon", "awaiting-departure"].indexOf(String(activeLeg.phase || "")) >= 0
   readonly property bool nextLegDelayed: !!nextLeg && (!!nextLeg.cancelled || !!nextLeg.late)
+  // Nerd Fonts pad the Material Design glyphs (U+F0000 and up), so they paint about a tenth
+  // smaller than the Font Awesome ones; scaled up, the icon keeps one size through every state.
+  readonly property real iconScale: iconGlyph().codePointAt(0) >= 0xF0000 ? 1.1 : 1
 
   function refresh() {
     if (root.feed) root.feed.refresh()
@@ -279,7 +282,7 @@ Panel {
     bar: root.bar
     text: root.iconGlyph()
     slotSize: Style.bar.statusSlot
-    fontSize: Style.font.caption
+    fontSize: Style.font.caption * root.iconScale
     active: root.hasAlert || root.approaching || root.leaveSoon || root.transferring || root.boardingAttention
       || root.departureAttention || root.activeLate || root.journey.stage === "complete"
     activeColor: root.iconColor()
@@ -375,7 +378,7 @@ Panel {
                 text: root.iconGlyph()
                 color: root.iconColor()
                 font.family: root.fontFamily
-                font.pixelSize: Style.font.title
+                font.pixelSize: Math.round(Style.font.title * root.iconScale)
               }
 
               ColumnLayout {
