@@ -298,7 +298,9 @@ def enrich_with_adsb(record: dict[str, Any], now: dt.datetime) -> dict[str, Any]
         remaining = adsb.haversine_nm(aircraft["lat"], aircraft["lon"], destination["lat"], destination["lon"])
         if flown + remaining > 0:
             record["progress"]["percent"] = round(100 * flown / (flown + remaining), 1)
-        project_early_arrival(record, remaining, aircraft.get("gs"), now)
+        # A route to another airport would make any plane look early.
+        if destination.get("code") == (record.get("arrival") or {}).get("code"):
+            project_early_arrival(record, remaining, aircraft.get("gs"), now)
 
     end_ms = (record.get("progress") or {}).get("etaEpochMs")
     end = dt.datetime.fromtimestamp(end_ms / 1000, dt.timezone.utc) if end_ms else None

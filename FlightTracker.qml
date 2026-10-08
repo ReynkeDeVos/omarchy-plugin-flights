@@ -280,7 +280,7 @@ Panel {
     path: Color.currentThemePath + "/colors.toml"
     printErrors: false
     onLoaded: {
-      var match = text().match(/^\s*green\s*=\s*["']?(#[0-9A-Fa-f]{6})/m)
+      var match = text().match(/^\s*(?:green|color2)\s*=\s*["']?(#[0-9A-Fa-f]{6})/m)
       root.green = match ? match[1] : Color.accent
     }
   }

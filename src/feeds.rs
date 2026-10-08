@@ -139,8 +139,12 @@ impl Feeds {
     fn route(&self, ident: &str) -> Option<Value> {
         let key = ident.trim().to_uppercase();
         let path = cache_path("route", &key);
+        // Routes cached before the destination's code was kept are fetched again.
         if let Some(cached) = read_json(&path, Some(ROUTE_TTL)) {
-            return truthy(&cached).then_some(cached);
+            let destination = field(&cached, "destination");
+            if !truthy(destination) || destination.get("code").is_some() {
+                return truthy(&cached).then_some(cached);
+            }
         }
         let data = self.json(&format!("{ROUTES_URL}/callsign/{key}"))?;
         let route_data = field(field(&data, "response"), "flightroute");
@@ -150,7 +154,7 @@ impl Feeds {
         }
         let airport = |node: &Value| {
             truthy(node)
-                .then(|| json!({"lat": field(node, "latitude"), "lon": field(node, "longitude")}))
+                .then(|| json!({"lat": field(node, "latitude"), "lon": field(node, "longitude"), "code": field(node, "iata_code")}))
         };
         let callsign = field(route_data, "callsign_icao");
         let route = json!({

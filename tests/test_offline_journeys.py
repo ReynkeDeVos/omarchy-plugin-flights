@@ -496,6 +496,31 @@ class EarlyArrivalTests(OfflineBackendTest):
         self.assertEqual(leg["progress"]["etaEpochMs"], ms(at("2026-12-23T09:00")))  # the countdown stays FlightStats'
         self.assertEqual(self.trip(A, at("2026-12-23T08:22")).event_keys, [])
 
+    def test_a_route_to_another_airport_does_not_count(self):
+        self.feeds.flight(A, flight(
+            "FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00", departed=True, callsign="DLH1001",
+        ))
+        self.feeds.route("LH1001", "DLH1001", "MUC", "FRA")  # adsbdb has the way back, 80 nm behind the plane
+        self.feeds.aircraft("DLH1001", hex="3c6444", lat=49.2, lon=10.1, alt_baro=24000, gs=400)
+        run = self.trip(A, at("2026-12-23T08:21"))
+        self.assertEqual(run.files["cache/omarchy-flights/route-LH1001.json"]["destination"]["code"], "FRA")
+        self.assertFalse(run.json["legs"][0]["early"])
+
+    def test_routes_cached_without_the_destination_code_are_fetched_again(self):
+        self.feeds.flight(A, flight(
+            "FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00", departed=True, callsign="DLH1001",
+        ))
+        self.feeds.route("LH1001", "DLH1001", "FRA", "MUC")
+        self.feeds.aircraft("DLH1001", hex="3c6444", lat=49.2, lon=10.1, alt_baro=24000, gs=400)
+        for root in self.roots.values():
+            folder = root / "cache" / "omarchy-flights"
+            folder.mkdir(parents=True)
+            old = {"callsignIcao": "DLH1001", "origin": {"lat": 50.0333, "lon": 8.5706}, "destination": {"lat": 48.3538, "lon": 11.7861}}
+            (folder / "route-LH1001.json").write_text(json.dumps(old), encoding="utf-8")
+        run = self.trip(A, at("2026-12-23T08:21"))
+        self.assertIn("/v0/callsign/LH1001", run.requests)
+        self.assertTrue(run.json["legs"][0]["early"])
+
 
 class LookupTests(OfflineBackendTest):
     def test_lookup_prints_one_leg_and_keeps_the_trip_state(self):
