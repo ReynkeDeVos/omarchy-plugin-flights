@@ -20,6 +20,13 @@ const DEPARTURE_SOON_MINUTES: f64 = 30.0;
 pub const DEFAULT_LEAVE_LEAD_MINUTES: i64 = 60;
 const TIGHT_CONNECTION_MINUTES: i64 = 60;
 const LATE_MINUTES: i64 = 15; // airline convention
+const EARLY_MINUTES: i64 = 10;
+// The aircraft's own pace: a straight line at ground speed, plus the slower descent
+// and approach over the last stretch, trusted only within two hours of landing.
+const APPROACH_MINUTES: f64 = 10.0;
+const APPROACH_NM: f64 = 100.0;
+const PROJECTION_HORIZON_MINUTES: f64 = 120.0;
+const MOVING_KNOTS: f64 = 100.0;
 const PICKUP_SHIFT_MINUTES: f64 = 10.0;
 const AIRBORNE: [&str; 3] = ["airborne", "arriving", "final-approach"];
 const BEFORE_DEPARTURE: [&str; 4] = [
@@ -421,6 +428,7 @@ fn airport_payload(
         "baggage": field(airport, "baggage"),
         "time": py_str(either(either(field(current, "time24"), field(scheduled, "time24")), &json!("—"))),
         "epochMs": moment.map(epoch_ms),
+        "scheduledEpochMs": schedule_time.map(epoch_ms),
         "homeTime": home_time(moment, zone, None),
     })
 }
@@ -482,6 +490,11 @@ pub fn normalize_flightstats(spec: &LegSpec, flight: &Value, now: Timestamp, zon
     } else {
         departure_delay.max(arrival_delay)
     };
+    // How far the landing estimate is ahead of the timetable; ADS-B may know better.
+    let early = match (departed, scheduled_end, end) {
+        (true, Some(scheduled), Some(end)) => py_round(minutes_between(end, scheduled)).max(0),
+        _ => 0,
+    };
 
     json!({
         "key": spec.key,
@@ -497,6 +510,8 @@ pub fn normalize_flightstats(spec: &LegSpec, flight: &Value, now: Timestamp, zon
         "alert": cancelled || field(status, "diverted") == &Value::Bool(true) || alert_words.contains("cancel"),
         "delayMinutes": delay,
         "late": delay >= LATE_MINUTES,
+        "earlyMinutes": early,
+        "early": early >= EARLY_MINUTES,
         "departure": departure,
         "arrival": arrival,
         "aircraft": {"callsign": field(track, "callsign"), "hex": null},
@@ -507,6 +522,30 @@ pub fn normalize_flightstats(spec: &LegSpec, flight: &Value, now: Timestamp, zon
         },
         "error": null,
     })
+}
+
+/// How early a leg in the air looks from the aircraft's distance and ground speed.
+/// FlightStats often keeps the timetable's arrival while the plane is well ahead of it.
+pub fn project_early_arrival(
+    record: &mut Value,
+    remaining_nm: f64,
+    knots: Option<f64>,
+    now: Timestamp,
+) {
+    let scheduled = truthy_number(field(field(record, "arrival"), "scheduledEpochMs"));
+    let Some((knots, scheduled)) = knots.filter(|knots| *knots >= MOVING_KNOTS).zip(scheduled)
+    else {
+        return;
+    };
+    // ponytail: a fixed allowance for descent and approach; holding patterns and detours look early.
+    let to_go =
+        remaining_nm / knots * 60.0 + APPROACH_MINUTES * (remaining_nm / APPROACH_NM).min(1.0);
+    if to_go > PROJECTION_HORIZON_MINUTES {
+        return;
+    }
+    let early = py_round((scheduled - epoch_ms(now) as f64) / 60_000.0 - to_go).max(0);
+    record["earlyMinutes"] = json!(early);
+    record["early"] = json!(early >= EARLY_MINUTES);
 }
 
 /// Recomputes the countdown of a cached leg for the current time.
@@ -667,6 +706,7 @@ pub fn snapshot(report: &Value) -> Value {
                 "phase": field(leg, "phase"),
                 "remaining": field(field(leg, "progress"), "remainingMinutes"),
                 "delay": safe_int(field(leg, "delayMinutes")),
+                "early": safe_int(field(leg, "earlyMinutes")),
                 "gate": field(field(leg, "departure"), "gate"),
             });
             (py_str(field(leg, "key")), state)
@@ -800,6 +840,16 @@ pub fn notification_events(
                 format!("{key}:delay:{}", new_delay.div_euclid(30)),
                 format!("{code} is delayed"),
                 format!("Current delay: about {new_delay} minutes"),
+                "critical",
+            );
+        }
+        let old_early = safe_int(field(before, "early"));
+        let new_early = safe_int(field(leg, "earlyMinutes"));
+        if is_airborne(new_phase) && old_early < EARLY_MINUTES && EARLY_MINUTES <= new_early {
+            out.add(
+                format!("{key}:early"),
+                format!("{code} is early"),
+                format!("Landing about {new_early} minutes ahead of schedule"),
                 "critical",
             );
         }
@@ -1392,6 +1442,69 @@ mod tests {
             (&airborne["delayMinutes"], &airborne["late"]),
             (&json!(10), &json!(false))
         );
+    }
+
+    #[test]
+    fn early_follows_the_landing_estimate_once_airborne() {
+        let (now, zone) = (at("2026-07-15T12:00:00Z"), zone("Europe/Berlin"));
+        let mut flight = json!({"schedule": {
+            "scheduledArrivalUTC": "2026-07-15T13:00:00.000Z",
+            "estimatedActualArrivalUTC": "2026-07-15T12:48:00.000Z",
+        }});
+        let waiting = normalize_flightstats(&spec("LH400@2026-07-15"), &flight, now, &zone);
+        flight["flightNote"] = json!({"hasDepartedRunway": true});
+        let airborne = normalize_flightstats(&spec("LH400@2026-07-15"), &flight, now, &zone);
+        assert_eq!(
+            (&waiting["earlyMinutes"], &waiting["early"]),
+            (&json!(0), &json!(false))
+        );
+        assert_eq!(
+            (&airborne["earlyMinutes"], &airborne["early"]),
+            (&json!(12), &json!(true))
+        );
+    }
+
+    #[test]
+    fn the_aircraft_pace_shows_an_early_landing_the_timetable_misses() {
+        // TK1661 on 2026-10-08: FlightStats kept 09:20, FlightAware expected 09:09.
+        let now = at("2026-10-08T06:14:00Z");
+        let scheduled = epoch_ms(at("2026-10-08T07:20:00Z"));
+        let record = || json!({"arrival": {"scheduledEpochMs": scheduled}, "earlyMinutes": 0, "early": false});
+        let mut near = record();
+        project_early_arrival(&mut near, 308.0, Some(421.0), now);
+        assert_eq!(
+            (&near["earlyMinutes"], &near["early"]),
+            (&json!(12), &json!(true))
+        );
+        // Too far out to trust the pace, or not moving: the timetable stands.
+        for (remaining, knots) in [(1_500.0, Some(450.0)), (5.0, Some(20.0)), (308.0, None)] {
+            let mut unchanged = record();
+            project_early_arrival(&mut unchanged, remaining, knots, now);
+            assert_eq!(unchanged, record(), "{remaining} nm at {knots:?} knots");
+        }
+    }
+
+    #[test]
+    fn an_early_landing_is_announced_once_while_in_the_air() {
+        let mut current = leg("LH400@2026-07-15", "arriving", Some(40), false, true);
+        current["earlyMinutes"] = json!(12);
+        let report =
+            json!({"generatedAtMs": 0, "legs": [current], "journey": {"stage": "en-route"}});
+        let previous = json!({"stage": "en-route", "legs": {"LH400@2026-07-15": {"phase": "arriving", "remaining": 41, "delay": 0, "early": 4, "gate": null}}});
+        let (events, fired) = notification_events(&previous, &report, BTreeSet::new());
+        assert_eq!(keys(&events), ["LH400@2026-07-15:early"]);
+        assert_eq!(
+            events[0]["body"],
+            "Landing about 12 minutes ahead of schedule"
+        );
+        assert!(notification_events(&previous, &report, fired).0.is_empty());
+
+        // Learning it only from the landing time is no news by then.
+        let mut landed = leg("LH400@2026-07-15", "landed", Some(0), true, true);
+        landed["earlyMinutes"] = json!(12);
+        let report = json!({"generatedAtMs": 0, "legs": [landed], "journey": {}});
+        let (events, _) = notification_events(&previous, &report, BTreeSet::new());
+        assert_eq!(keys(&events), ["LH400@2026-07-15:landed"]);
     }
 
     #[test]

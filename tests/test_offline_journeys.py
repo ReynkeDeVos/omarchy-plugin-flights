@@ -476,6 +476,27 @@ class FourLegJourneyTests(OfflineBackendTest):
                 self.assertEqual(sorted(keys), sorted([f"{A}:landed", "journey:connection:1"]))
 
 
+class EarlyArrivalTests(OfflineBackendTest):
+    def test_a_plane_ahead_of_the_timetable_is_announced_once(self):
+        # FlightStats keeps the timetable's 09:00; only the aircraft's pace shows the early landing.
+        self.feeds.flight(A, flight(
+            "FRA", "MUC", "2026-12-23T08:00", "2026-12-23T09:00", est_departure="2026-12-23T08:00",
+            est_arrival="2026-12-23T09:00", departed=True, callsign="DLH1001",
+        ))
+        self.feeds.route("LH1001", "DLH1001", "FRA", "MUC")
+        self.feeds.aircraft("DLH1001", hex="3c6444", lat=49.2, lon=10.1, alt_baro=24000)
+        self.assertFalse(self.trip(A, at("2026-12-23T08:20")).json["legs"][0]["early"])
+
+        self.feeds.aircraft("DLH1001", hex="3c6444", lat=49.2, lon=10.1, alt_baro=24000, gs=400)
+        early = self.trip(A, at("2026-12-23T08:21"))
+        leg = early.json["legs"][0]
+        self.assertEqual((leg["earlyMinutes"], leg["early"]), (18, True))
+        self.assertEqual(early.event_keys, [f"{A}:early"])
+        self.assertEqual(early.json["events"][0]["body"], "Landing about 18 minutes ahead of schedule")
+        self.assertEqual(leg["progress"]["etaEpochMs"], ms(at("2026-12-23T09:00")))  # the countdown stays FlightStats'
+        self.assertEqual(self.trip(A, at("2026-12-23T08:22")).event_keys, [])
+
+
 class LookupTests(OfflineBackendTest):
     def test_lookup_prints_one_leg_and_keeps_the_trip_state(self):
         self.feeds.flight(B, flight("MUC", "DXB", "2026-12-23T10:30", "2026-12-23T16:30", gate="G7"))

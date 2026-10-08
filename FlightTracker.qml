@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -16,6 +17,8 @@ Panel {
   // The bar hands the settings over after creating the widget; until then there is nothing to pass on.
   property bool configured: false
   property QtObject attachedFeed: null
+  // The shell keeps only the theme's red; its green marks a flight running early.
+  property color green: Color.accent
 
   // One feed for every monitor: the host's service under the built-in bar. A
   // replacement bar keeps services from its widgets, so there each loads its own.
@@ -34,6 +37,7 @@ Panel {
   // The backend decides what counts as late, so the red icon and the delay notification agree.
   readonly property int activeDelay: activeLeg ? Number(activeLeg.delayMinutes || 0) : 0
   readonly property bool activeLate: !!(activeLeg && activeLeg.late)
+  readonly property bool activeEarly: !!(activeLeg && activeLeg.early)
   readonly property bool needsSetup: !feed || feed.needsSetup
   readonly property bool setupShown: editingTrip || needsSetup
   readonly property var pickup: report && report.pickup ? report.pickup : ({})
@@ -130,6 +134,7 @@ Panel {
     if (hasAlert || (activeLeg && activeLeg.phase === "cancelled")) return root.urgent
     if (journey.stage === "complete") return Color.accent
     if (leaveSoon || activeLate) return root.urgent
+    if (activeEarly) return root.green
     if (approaching || boardingAttention || departureAttention) return Color.accent
     return root.foreground
   }
@@ -270,6 +275,23 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
+  FileView {
+    id: themeColors
+    path: Color.currentThemePath + "/colors.toml"
+    printErrors: false
+    onLoaded: {
+      var match = text().match(/^\s*green\s*=\s*["']?(#[0-9A-Fa-f]{6})/m)
+      root.green = match ? match[1] : Color.accent
+    }
+  }
+
+  // Theme switches reach the shell over IPC once the new colors.toml is in place.
+  Connections {
+    target: Color
+    function onBackgroundChanged() { themeColors.reload() }
+    function onAccentChanged() { themeColors.reload() }
+  }
+
   Loader {
     id: ownFeed
     active: root.bar !== null && root.sharedFeed === null
@@ -284,7 +306,7 @@ Panel {
     slotSize: Style.bar.statusSlot
     fontSize: Style.font.caption * root.iconScale
     active: root.hasAlert || root.approaching || root.leaveSoon || root.transferring || root.boardingAttention
-      || root.departureAttention || root.activeLate || root.journey.stage === "complete"
+      || root.departureAttention || root.activeLate || root.activeEarly || root.journey.stage === "complete"
     activeColor: root.iconColor()
     tooltipText: root.tooltipText()
     onPressed: function(buttonCode) {
@@ -400,8 +422,9 @@ Panel {
                   Layout.fillWidth: true
                   textFormat: Text.PlainText
                   text: root.activeLeg ? root.activeLeg.code + " · " + root.activeLeg.route
-                    + (root.activeLate ? " · " + root.activeDelay + " min late" : "") : "Updating…"
-                  color: root.activeLate ? root.urgent : root.dim
+                    + (root.activeLate ? " · " + root.activeDelay + " min late"
+                      : root.activeEarly ? " · " + root.activeLeg.earlyMinutes + " min early" : "") : "Updating…"
+                  color: root.activeLate ? root.urgent : root.activeEarly ? root.green : root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
