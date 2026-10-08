@@ -25,6 +25,13 @@ DEPARTURE_SOON_MINUTES = 30
 DEFAULT_LEAVE_LEAD_MINUTES = 60
 TIGHT_CONNECTION_MINUTES = 60
 LATE_MINUTES = 15  # airline convention
+EARLY_MINUTES = 10
+# The aircraft's own pace: a straight line at ground speed, plus the slower descent
+# and approach over the last stretch, trusted only within two hours of landing.
+APPROACH_MINUTES = 10
+APPROACH_NM = 100
+PROJECTION_HORIZON_MINUTES = 120
+MOVING_KNOTS = 100
 PICKUP_SHIFT_MINUTES = 10
 
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "omarchy-flights"
@@ -143,6 +150,7 @@ def airport_payload(
         "baggage": airport.get("baggage"),
         "time": str(current.get("time24") or scheduled.get("time24") or "—"),
         "epochMs": epoch_ms(current_time or schedule_time),
+        "scheduledEpochMs": epoch_ms(schedule_time),
         "homeTime": home_time(current_time or schedule_time, zone),
     }
 
@@ -232,6 +240,8 @@ def normalize_flightstats(
     alert_words = f"{status_text} {description}".lower()
     # Once airborne only the arrival delay matters; before that, the worse of both.
     delay = arrival_delay if departed else max(departure_delay, arrival_delay)
+    # How far the landing estimate is ahead of the timetable; ADS-B may know better.
+    early = max(0, round((scheduled_end - end).total_seconds() / 60)) if departed and scheduled_end and end else 0
 
     return {
         "key": spec["key"],
@@ -247,6 +257,8 @@ def normalize_flightstats(
         "alert": cancelled or status.get("diverted") is True or "cancel" in alert_words,
         "delayMinutes": delay,
         "late": delay >= LATE_MINUTES,
+        "earlyMinutes": early,
+        "early": early >= EARLY_MINUTES,
         "departure": departure,
         "arrival": arrival,
         "aircraft": {"callsign": track.get("callsign"), "hex": None},
@@ -286,6 +298,9 @@ def enrich_with_adsb(record: dict[str, Any], now: dt.datetime) -> dict[str, Any]
         remaining = adsb.haversine_nm(aircraft["lat"], aircraft["lon"], destination["lat"], destination["lon"])
         if flown + remaining > 0:
             record["progress"]["percent"] = round(100 * flown / (flown + remaining), 1)
+        # A route to another airport would make any plane look early.
+        if destination.get("code") == (record.get("arrival") or {}).get("code"):
+            project_early_arrival(record, remaining, aircraft.get("gs"), now)
 
     end_ms = (record.get("progress") or {}).get("etaEpochMs")
     end = dt.datetime.fromtimestamp(end_ms / 1000, dt.timezone.utc) if end_ms else None
@@ -302,6 +317,20 @@ def enrich_with_adsb(record: dict[str, Any], now: dt.datetime) -> dict[str, Any]
         altitude=altitude,
     )
     return record
+
+
+def project_early_arrival(record: dict[str, Any], remaining_nm: float, knots: Any, now: dt.datetime) -> None:
+    # How early a leg in the air looks from the aircraft's distance and ground speed.
+    # FlightStats often keeps the timetable's arrival while the plane is well ahead of it.
+    scheduled = (record.get("arrival") or {}).get("scheduledEpochMs")
+    if not isinstance(knots, (int, float)) or knots < MOVING_KNOTS or not scheduled:
+        return
+    to_go = remaining_nm / knots * 60 + APPROACH_MINUTES * min(1.0, remaining_nm / APPROACH_NM)
+    if to_go > PROJECTION_HORIZON_MINUTES:
+        return
+    early = max(0, round((scheduled - epoch_ms(now)) / 60_000 - to_go))
+    record["earlyMinutes"] = early
+    record["early"] = early >= EARLY_MINUTES
 
 
 def journey_cache(spec: dict[str, str]) -> str:
@@ -458,6 +487,7 @@ def snapshot(report: dict[str, Any]) -> dict[str, Any]:
                 "phase": leg.get("phase"),
                 "remaining": (leg.get("progress") or {}).get("remainingMinutes"),
                 "delay": safe_int(leg.get("delayMinutes")),
+                "early": safe_int(leg.get("earlyMinutes")),
                 "gate": (leg.get("departure") or {}).get("gate"),
             }
             for leg in report.get("legs") or []
@@ -520,6 +550,10 @@ def notification_events(
         new_delay = safe_int(leg.get("delayMinutes"))
         if old_delay < 30 <= new_delay:
             add(event(f"{key}:delay:{new_delay // 30}", f"{leg['code']} is delayed", f"Current delay: about {new_delay} minutes", "critical"))
+        old_early = safe_int(before.get("early"))
+        new_early = safe_int(leg.get("earlyMinutes"))
+        if new_phase in {"airborne", "arriving", "final-approach"} and old_early < EARLY_MINUTES <= new_early:
+            add(event(f"{key}:early", f"{leg['code']} is early", f"Landing about {new_early} minutes ahead of schedule", "critical"))
 
         old_gate = str(before.get("gate") or "")
         new_gate = str((leg.get("departure") or {}).get("gate") or "")

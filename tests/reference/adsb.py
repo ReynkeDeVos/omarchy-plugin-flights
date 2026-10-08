@@ -75,13 +75,15 @@ def haversine_nm(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> floa
 def _airport(node: dict[str, Any] | None) -> dict[str, Any] | None:
     if not node:
         return None
-    return {"lat": node.get("latitude"), "lon": node.get("longitude")}
+    return {"lat": node.get("latitude"), "lon": node.get("longitude"), "code": node.get("iata_code")}
 
 
 def resolve_route(ident: str) -> dict[str, Any] | None:
     key = ident.strip().upper()
     cached = read_json(cache_path("route", key), ROUTE_TTL)
-    if cached is not None:
+    # Routes cached before the destination's code was kept are fetched again.
+    destination = cached.get("destination") if isinstance(cached, dict) else None
+    if cached is not None and not (destination and (not isinstance(destination, dict) or "code" not in destination)):
         return cached or None
     try:
         data = _get_json(f"{ROUTES_URL}/callsign/{key}")

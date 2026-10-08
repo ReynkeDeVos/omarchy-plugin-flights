@@ -323,6 +323,11 @@ fn enrich_with_adsb(record: &mut Value, context: &Context) {
             record["progress"]["percent"] =
                 json!(journey::round_tenth(100.0 * flown / (flown + remaining)));
         }
+        // A route to another airport would make any plane look early.
+        if field(destination, "code") == field(field(record, "arrival"), "code") {
+            let knots = number(field(&aircraft, "gs"));
+            journey::project_early_arrival(record, remaining, knots, context.now);
+        }
     }
 
     let eta = field(field(record, "progress"), "etaEpochMs");

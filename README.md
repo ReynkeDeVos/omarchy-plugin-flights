@@ -34,7 +34,7 @@ omarchy plugin add https://github.com/ReynkeDeVos/omarchy-plugin-flights.git
 
 Then click the suitcase in the bar, add the flights, and say how long it takes you to get to the airport. The pen in the panel (or `E`) edits the trip later.
 
-Left-click opens the panel, middle-click the live map, right-click refreshes. In the panel, `E` edits the trip, `M` opens the map, `R` refreshes and `Esc` closes; the setup works from the keyboard alone. A delay of 15 minutes or more turns the icon red; the warning triangle is only for cancellations, diversions and connections under an hour. Notifications cover takeoff, delays, gate changes, landing in 60/30/15 minutes, the transfer, when to leave, and arrival.
+Left-click opens the panel, middle-click the live map, right-click refreshes. In the panel, `E` edits the trip, `M` opens the map, `R` refreshes and `Esc` closes; the setup works from the keyboard alone. A delay of 15 minutes or more turns the icon red, landing 10 minutes or more early turns it green; the warning triangle is only for cancellations, diversions and connections under an hour. Notifications cover takeoff, delays, early arrivals, gate changes, landing in 60/30/15 minutes, the transfer, when to leave, and arrival.
 
 Data comes from FlightStats and adsb.lol/adsbdb without API keys. It can be late or wrong, so check with the airline before you drive.
 
